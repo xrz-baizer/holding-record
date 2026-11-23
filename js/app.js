@@ -6,11 +6,16 @@ const priceInput=n=>Math.round((n+Number.EPSILON)*1000)/1000;
 const marketWan=n=>n===null?'—':money(n/10000);
 const signed=n=>n===null?'—':`${n<0?'-':''}${money(Math.abs(n))}`,color=n=>n>0?'gain':n<0?'loss':'neutral';
 let state=C.empty(),db,revision=0,busy=false,ready=false,tableResizeObserver;
+let quoteRequestPending=false;
 const t=(key,params)=>I18n.t(key,params);
 const modal=$('#modal'),getStock=(data,id)=>{const s=data.stocks.find(s=>s.id===id);if(!s)throw Error(t("股票不存在。"));return s;};
 function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').classList.remove('show'),4000);}
-function openDialog(title,sub,body,submit,handler,extra='',wide=false){
- modal.classList.toggle('wide',wide);$('#modal-content').innerHTML=`<form id="dialog-form"><div class="modal-head"><h2>${title}</h2><button type="button" data-action="close" aria-label="${t("关闭")}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5L15 15M15 5L5 15"/></svg></button></div>${sub?`<p class="hint">${sub}</p>`:''}${body}<div id="form-error" role="alert"></div><div class="modal-foot">${extra}<button type="button" data-action="close">${t("取消")}</button><button class="primary" type="submit">${submit}</button></div></form>`;
+function openDialog(title,sub,body,submit,handler,extra='',layout=''){
+ const lotEntry=layout==='lot-entry';
+ modal.classList.toggle('wide',layout==='wide');
+ modal.classList.toggle('lot-entry',lotEntry);
+ const fields=`${sub?`<p class="hint">${sub}</p>`:''}${body}<div id="form-error" role="alert"></div>`;
+ $('#modal-content').innerHTML=`<form id="dialog-form"><div class="modal-head"><h2>${title}</h2><button type="button" data-action="close" aria-label="${t("关闭")}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5L15 15M15 5L5 15"/></svg></button></div>${lotEntry?`<div class="lot-entry-body">${fields}</div>`:fields}<div class="modal-foot">${extra}<button type="button" data-action="close">${t("取消")}</button><button class="primary" type="submit">${submit}</button></div></form>`;
  syncSteppers($('#dialog-form'));
  $('#dialog-form').querySelectorAll('[data-date-text]').forEach(validateDateInput);
  if(!modal.open)modal.showModal();$('#dialog-form').onsubmit=async e=>{e.preventDefault();if(busy)return;const btn=e.submitter;btn.disabled=true;try{await handler(readForm(e.target));}catch(err){$('#form-error').textContent=I18n.error(err.message);}finally{btn.disabled=false;}};
@@ -62,6 +67,49 @@ async function write(next){
  await new Promise((resolve,reject)=>{const tx=db.transaction('ledger','readwrite'),store=tx.objectStore('ledger');let conflict=false;const r=store.get('main');r.onsuccess=()=>{if((r.result?.revision??0)!==revision){conflict=true;tx.abort();return;}store.put({revision:revision+1,state:next},'main');};tx.oncomplete=resolve;tx.onabort=()=>reject(Error(conflict?t("另一个页面已更新账本，请刷新本页。"):t("保存失败，原数据未改变。")));tx.onerror=()=>reject(Error(t("保存失败，请检查浏览器存储空间。")));});revision++;state=next;render();
 }
 async function mutate(fn,message){if(busy)return;busy=true;try{const next=structuredClone(state);await fn(next);await write(C.validate(next));modal.close();if(message)toast(message);}finally{busy=false;}}
+async function fetchStockQuote(code){
+ const market=/^[56]/.test(code)?'sh':/^[013]/.test(code)?'sz':/^(?:[48]|92)/.test(code)?'bj':null;
+ if(!/^\d{6}$/.test(code)||!market)throw Error(t('请输入支持的六位 A 股代码。'));
+ const symbol=market+code,controller=new AbortController();
+ const timeout=setTimeout(()=>controller.abort(),8000);
+ let res,payload;
+ try{
+  res=await fetch(`https://qt.gtimg.cn/q=${symbol}`,{cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:controller.signal});
+  if(res.ok)payload=new TextDecoder('gb18030').decode(await res.arrayBuffer());
+ }catch{throw Error(t('行情请求失败，请稍后重试。'));}
+ finally{clearTimeout(timeout);}
+ if(res.status===429)throw Error(t('行情请求太频繁，请稍后重试。'));
+ if(!res.ok)throw Error(t('行情请求失败，请稍后重试。'));
+
+ const prefix=`v_${symbol}="`;
+ const row=payload.split(';').map(line=>line.trim()).find(line=>line.startsWith(prefix)&&line.endsWith('"'));
+ const fields=row?.slice(prefix.length,-1).split('~');
+ const price=Number(fields?.[3]);
+ const stamp=fields?.[30]?.match(/^(\d{4})(\d{2})(\d{2})([01]\d|2[0-3])([0-5]\d)[0-5]\d$/);
+ const date=stamp?`${stamp[1]}-${stamp[2]}-${stamp[3]}`:'';
+ if(fields?.[2]!==code||!Number.isFinite(price)||price<.000001||price>1e7||!C.validDate(date)||date>C.today())throw Error(t('未查到有效行情，请检查股票代码。'));
+ return {price,time:`${date} ${stamp[4]}:${stamp[5]}`};
+}
+async function refreshQuote(id,button){
+ const stock=getStock(state,id);
+ if(!stock.code){baseDialog(id);$('#field-stock-code').focus();return;}
+ if(quoteRequestPending){toast(t('正在获取行情…'));return;}
+ if($('.quote-badge input[data-dirty]'))throw Error(t('请先按回车保存手动输入的价格。'));
+
+ quoteRequestPending=true;
+ button.disabled=true;
+ button.setAttribute('aria-busy','true');
+ try{
+  const quote=await fetchStockQuote(stock.code);
+  if($('.quote-badge input[data-dirty]'))throw Error(t('请先按回车保存手动输入的价格。'));
+  if(busy||modal.open||!state.stocks.includes(stock))throw Error(t('页面已变更，请重新刷新价格。'));
+  await mutate(next=>C.quote(getStock(next,id),quote.price),t('价格已更新 · 腾讯财经 {time}',{time:quote.time}));
+ }finally{
+  quoteRequestPending=false;
+  button.disabled=false;
+  button.removeAttribute('aria-busy');
+ }
+}
 function render(){
  I18n.setLanguage(state.view?.language??'en');
  document.documentElement.lang=I18n.language==='en'?'en':'zh-CN';
@@ -79,12 +127,56 @@ function render(){
  $('#save-status').textContent=ready?t("已保存"):t("存储不可用");
  const list=state.stocks.map(C.stats),missing=list.some(x=>x.value===null),sum=k=>C.round(list.reduce((n,s)=>n+(s[k]??0),0)),pnl=missing?null:sum('total'),value=missing?null:sum('value'),cost=C.round(list.reduce((n,s)=>n+s.cost,0)-state.stocks.reduce((n,s)=>n+s.realized,0)),pnlPct=pnl===null?null:cost>0?pnl/cost*100:null;
  $('#overview').innerHTML=`<div><div class="overview-heading"><span>${t("总持仓盈亏")}</span><b class="${color(pnl)}">${pnlPct===null?'—':signed(pnlPct)+'%'}</b></div><strong class="${color(pnl)}">${signed(pnl)}</strong></div><div><span>${t("总持仓市值（万）")}</span><strong title="CNY ${money(value)}">${marketWan(value)}</strong></div>`;
- $('#stocks').innerHTML=state.stocks.length?state.stocks.map(stockCard).join(''):`<div class="empty"><p>${t("还没有持仓")}</p><button class="primary" data-action="add-stock">${t("＋ 新增股票 / 录入已有持仓")}</button></div>`;
+ const phoneBar=$('#phone-bar');
+ renderStocks($('#stocks'),phoneBar && !phoneBar.hidden);
  $('.app-shell').classList.toggle('three-positions',state.stocks.length===3);
  tableResizeObserver?.disconnect();
- tableResizeObserver=new ResizeObserver(entries=>entries.forEach(({target})=>{const panel=target.closest('.mobile-panel');if(target.classList.contains('table-wrap')){const style=getComputedStyle(target),gap=`${Math.max(0,target.offsetWidth-target.clientWidth-parseFloat(style.borderLeftWidth)-parseFloat(style.borderRightWidth))}px`;target.previousElementSibling.style.marginRight=gap;target.nextElementSibling.style.marginRight=gap;fitNumericText(target.nextElementSibling);}if(panel){const header=panel.querySelector('.table-header'),footer=panel.querySelector('.table-footer');footer.style.setProperty('--table-footer-height',header.offsetHeight?`${header.offsetHeight}px`:'auto');}fitNumericText(target);}));
+ tableResizeObserver=new ResizeObserver(entries=>entries.forEach(({target})=>{
+  const viewport=target.closest('.phone-table-scroll');
+  if(viewport){
+   syncTableScroll(viewport);
+   if(target===viewport)fitNumericText(viewport);
+   return;
+  }
+  const panel=target.closest('.mobile-panel');if(target.classList.contains('table-wrap')){const style=getComputedStyle(target),gap=`${Math.max(0,target.offsetWidth-target.clientWidth-parseFloat(style.borderLeftWidth)-parseFloat(style.borderRightWidth))}px`;target.previousElementSibling.style.marginRight=gap;target.nextElementSibling.style.marginRight=gap;fitNumericText(target.nextElementSibling);}if(panel){const header=panel.querySelector('.table-header'),footer=panel.querySelector('.table-footer');footer.style.setProperty('--table-footer-height',header.offsetHeight?`${header.offsetHeight}px`:'auto');}fitNumericText(target);}));
  document.querySelectorAll('.mobile-panel .table-wrap').forEach(wrap=>{const head=wrap.previousElementSibling,foot=wrap.nextElementSibling;wrap.addEventListener('scroll',()=>{head.scrollLeft=wrap.scrollLeft;foot.scrollLeft=wrap.scrollLeft;},{passive:true});tableResizeObserver.observe(head);tableResizeObserver.observe(wrap);tableResizeObserver.observe(wrap.querySelector('table'));});
+ document.querySelectorAll('.phone-table-scroll').forEach(viewport=>{
+  syncTableScroll(viewport);
+  viewport.addEventListener('scroll',()=>syncTableScroll(viewport),{passive:true});
+  tableResizeObserver.observe(viewport);
+  tableResizeObserver.observe(viewport.querySelector('table'));
+ });
  fitNumericText($('#stocks'));
+}
+function syncTableScroll(viewport){
+ const maxTop=viewport.scrollHeight-viewport.clientHeight;
+ const top=viewport.scrollTop;
+ const left=viewport.scrollLeft;
+ viewport.classList.toggle('has-more-rows',maxTop>1);
+ viewport.classList.toggle('frozen-over-data',left>0);
+ viewport.classList.toggle('head-over-data',maxTop>1 && top>0);
+ viewport.classList.toggle('foot-over-data',maxTop>1 && top<maxTop-1);
+}
+function phonePageIndex(stocks){
+ return Math.max(0,Math.min(stocks.children.length-1,Math.round(stocks.scrollTop/(stocks.clientHeight||1))));
+}
+function renderStocks(stocks,phoneLayout){
+ const previousIndex=phoneLayout?phonePageIndex(stocks):0;
+ const previous=phoneLayout?stocks.children[previousIndex]:null;
+ const previousId=previous?.dataset.stockId;
+ const table=previous?.querySelector('.phone-table-scroll');
+ const top=table?.scrollTop||0,left=table?.scrollLeft||0;
+ stocks.innerHTML=state.stocks.length?state.stocks.map(s=>stockCard(s,phoneLayout)).join(''):`<div class="empty"><p>${t("还没有持仓")}</p><button class="primary" data-action="add-stock">${t("＋ 新增股票 / 录入已有持仓")}</button></div>`;
+ if(!previousId || !stocks.clientHeight)return;
+ const cards=Array.from(stocks.children);
+ const current=cards.find(card=>card.dataset.stockId===previousId) || cards[Math.min(previousIndex,cards.length-1)];
+ if(!current?.dataset.stockId)return;
+ stocks.scrollTop=cards.indexOf(current)*stocks.clientHeight;
+ if(current.dataset.stockId===previousId){
+  const viewport=current.querySelector('.phone-table-scroll');
+  viewport.scrollTop=top;
+  viewport.scrollLeft=left;
+ }
 }
 function fitNumericText(container){
  container.querySelectorAll('.pnl-line,.value-line,.numeric-line').forEach(line=>{
@@ -94,20 +186,45 @@ function fitNumericText(container){
   line.title=line.textContent;
  });
 }
-function stockCard(s){const columns=[8,10,10,14,10,13,17,18];const st=C.stats(s),totalPct=st.total===null||st.cost-s.realized<=0?null:st.total/(st.cost-s.realized)*100,mobile=C.sortedMobileLots(s),mobileQty=mobile.reduce((n,l)=>n+l.qty,0),mobileValue=mobileQty===0?0:s.price===null?null:C.round(mobileQty*s.price),mobilePnl=mobileValue===null?null:C.round(mobileValue-st.mobileCost),pct=mobilePnl===null?null:st.mobileCost?mobilePnl/st.mobileCost*100:0;
- return `<article class="stock stock-grid">
- <section class="base-panel"><div class="stock-name-line"><h2>${esc(s.name)}</h2><form class="inline-quote quote-badge" data-stock="${s.id}" style="--quote-ch:${s.price===null?3:String(C.round(s.price)).length}"><input class="stock-current-price" name="price" type="number" step="0.001" min="0.001" max="10000000" value="${s.price===null?'':C.round(s.price)}" data-raw-value="${s.price??''}" aria-label="${esc(s.name)} ${t('现价')}" enterkeyhint="done" required></form></div><dl class="position-metrics stock-position"><div class="position-pnl"><dt>${t("总盈亏")}</dt><dd class="${color(st.total)}" title="${t("总盈亏包含已结算盈亏，成本已抵扣已实现净收益")}">${signed(st.total)} / ${totalPct===null?'—':signed(totalPct)+'%'}</dd></div><div class="market-value"><dt>${t("市值")}</dt><dd title="CNY ${money(st.value)}">${marketWan(st.value)} <small class="market-unit">${st.value===null?'':t("万")}</small></dd></div><div class="position-emphasis"><dt>${t("持仓成本价")}</dt><dd>${priceText(st.qty?(st.cost-s.realized)/st.qty:null)}</dd></div><div class="position-emphasis"><dt>${t("总持仓 / 底仓")}</dt><dd>${money(st.qty,0)} / ${money(st.baseQty,0)} ${t("股")}</dd></div></dl><div class="mobile-capacity">${s.mobileTargetQty?t("机动仓预设 {target} 股 · {status} {remaining} 股",{target:money(s.mobileTargetQty,0),status:t(mobileQty>s.mobileTargetQty?"超出":"剩余"),remaining:`<strong>${money(Math.abs(s.mobileTargetQty-mobileQty),0)}</strong>`}):t("机动仓预设：未设置")}</div></section>
- <section class="mobile-panel"><div class="table-header"><div class="table-header-grid" role="row"><span role="columnheader">${t("股数")}</span><span role="columnheader">${t("买入价")}</span><span role="columnheader">${t("持有天数")}</span><span role="columnheader">${t("盈亏")}</span><span role="columnheader">${t("盈亏率")}</span><span role="columnheader" title="${t("市值（元）")}">${t("市值/元")}</span><span role="columnheader">${t("买入时间")}</span><span role="columnheader">${t("操作")}</span></div></div><div class="table-wrap" tabindex="0" aria-label="${t("机动仓记录")}"><table aria-label="${t("机动仓明细")}"><colgroup>${columns.map(width=>`<col style="width:${width}%">`).join('')}</colgroup><tbody>${mobile.length?mobile.map(l=>lotRow(s,l)).join(''):`<tr><td colspan="8" class="no-lots">${t("暂无机动仓")}</td></tr>`}</tbody></table></div><div class="table-footer" role="region" aria-label="${t('合计')}"><table aria-label="${t('合计')}"><colgroup>${columns.map(width=>`<col style="width:${width}%">`).join('')}</colgroup>${mobileFooter(s)}</table></div></section>
- <section class="operation-panel"><button class="primary" data-action="buy" data-id="${s.id}">${t("＋ 机动仓")}</button><div class="secondary-actions"><button class="primary" data-action="edit-stock" data-id="${s.id}">${t("修改股票")}</button></div><div class="stock-order"><button data-action="move-up" data-id="${s.id}" ${state.stocks[0]?.id===s.id?'disabled':''}>↑ ${t("上移")}</button><button data-action="move-down" data-id="${s.id}" ${state.stocks.at(-1)?.id===s.id?'disabled':''}>↓ ${t("下移")}</button></div><button class="primary history-button" data-action="history" data-id="${s.id}" aria-haspopup="dialog">${t("交易历史")}</button></section></article>`;
+function quoteForm(stock){
+ const price=stock.price===null?'':String(C.round(stock.price));
+ return `<form class="inline-quote quote-badge" data-stock="${stock.id}" style="--quote-ch:${Math.max(3,price.length)}">
+ <input class="stock-current-price" name="price" type="number" step="0.001" min="0.001" max="10000000" value="${price}" data-raw-value="${stock.price??''}" aria-label="${esc(stock.name)} ${t('现价')}" enterkeyhint="done" required>
+ </form>`;
 }
-function lotRow(s,l){const age=C.days(l.date),value=s.price===null?null:C.round(s.price*l.qty),pnl=value===null?null:C.round(value-l.cost),pct=pnl===null||!l.cost?null:pnl/l.cost*100;
- return `<tr><td class="numeric-cell" data-label="${t("股数")}"><span class="numeric-line">${money(l.qty,0)}</span></td><td data-label="${t("买入价")}" title="${t("买入费用")} ${money(l.fee)}"><span class="numeric-line">${priceText(l.price)}</span></td><td class="age-cell" data-label="${t("持有天数")}" title="${l.date||t("买入日期未录入")}"><span>${age===null?t("未知"):`${age}${t("天")}`}</span></td><td data-label="${t("浮动盈亏")}" class="pnl-cell ${color(pnl)}"><span class="pnl-line">${signed(pnl)}</span></td><td data-label="${t("盈亏率")}" class="pnl-cell ${color(pnl)}"><span class="pnl-line">${pct===null?'—':`${signed(pct)}%`}</span></td><td class="value-cell" data-label="${t("市值（元）")}" title="CNY ${money(value)}"><span class="value-line">${money(value)}</span></td><td class="purchase-date" data-label="${t("买入时间")}">${l.date?esc(l.date):t("未知")}</td><td class="row-actions"><div class="lot-actions"><button data-action="settle" data-id="${s.id}" data-lot="${l.id}">${t("卖出")}</button><button data-action="edit-lot" data-id="${s.id}" data-lot="${l.id}">${t("更正")}</button></div></td></tr>`;
+function quoteRefreshButton(stock,compact=false){
+ const label=t('刷新现价'),hint=stock.code?label:t('填写股票代码以刷新现价');
+ return `<button class="quote-refresh${compact?' quote-icon':''}" type="button" data-action="refresh-quote" data-id="${stock.id}" title="${hint}" aria-label="${label} · ${esc(stock.name)}"><span aria-hidden="true">↻</span>${compact?'':label}</button>`;
 }
-function mobileFooter(s){const st=C.mobileSummary(s);return `<tfoot><tr class="mobile-summary"><td data-label="${t('总股数')}"><span class="numeric-line">${money(st.qty,0)}</span></td><td data-label="${t('平均买入价')}"><span class="numeric-line">${priceText(st.avgPrice)}</span></td><td data-label="${t('平均持有天数')}"><span class="numeric-line">${st.avgDays===null?'—':money(st.avgDays)+t('天')}</span></td><td data-label="${t('总盈亏')}" class="${color(st.pnl)}"><span class="numeric-line">${signed(st.pnl)}</span></td><td data-label="${t('总盈亏率')}" class="${color(st.pnl)}"><span class="numeric-line">${st.pct===null?'—':signed(st.pct)+'%'}</span></td><td data-label="${t('总市值')}"><span class="numeric-line">${money(st.value)}</span></td><td class="summary-label">${t('合计')}</td><td class="row-actions"><button data-action="sell-all" data-id="${s.id}" ${st.qty?'':'disabled'}>${t('全部卖出')}</button></td></tr></tfoot>`;}
+function phoneLots(s,lots){
+ const labels=['股数','买入价','持有天数','盈亏','盈亏率','市值（元）','操作'];
+ return `<section class="phone-lots"><h3 class="phone-lots-heading">${t('机动仓明细')}</h3>
+ <div class="phone-table-frame"><div class="phone-table-scroll" tabindex="0" role="region" aria-label="${t('机动仓明细')}"><table>
+ <colgroup>${['shares','price','age','pnl','return','value','actions'].map(key=>`<col class="col-${key}">`).join('')}</colgroup>
+ <thead><tr>${labels.map(label=>`<th scope="col">${t(label)}</th>`).join('')}</tr></thead>
+ <tbody>${lots.length?lots.map(l=>lotRow(s,l,true)).join(''):`<tr><td colspan="7">${t('暂无机动仓')}</td></tr>`}</tbody>
+ ${mobileFooter(s,true)}</table></div></div></section>`;
+}
+function stockCard(s,phone=false){const columns=[8,10,10,14,10,13,17,18];const st=C.stats(s),totalPct=st.total===null||st.cost-s.realized<=0?null:st.total/(st.cost-s.realized)*100,mobile=C.sortedMobileLots(s),mobileQty=mobile.reduce((n,l)=>n+l.qty,0),mobileValue=mobileQty===0?0:s.price===null?null:C.round(mobileQty*s.price),mobilePnl=mobileValue===null?null:C.round(mobileValue-st.mobileCost),pct=mobilePnl===null?null:st.mobileCost?mobilePnl/st.mobileCost*100:0;
+ const addLot=`<button type="button" aria-haspopup="dialog" class="primary" data-action="buy" data-id="${s.id}">${t("＋ 机动仓")}</button>`;
+ const editStock=`<button class="primary" data-action="edit-stock" data-id="${s.id}">${t("修改股票")}</button>`;
+ const history=`<button class="primary history-button" data-action="history" data-id="${s.id}" aria-haspopup="dialog">${t("交易历史")}</button>`;
+ const order=`<div class="stock-order"><button data-action="move-up" data-id="${s.id}" ${state.stocks[0]?.id===s.id?'disabled':''}>↑ ${t("上移")}</button><button data-action="move-down" data-id="${s.id}" ${state.stocks.at(-1)?.id===s.id?'disabled':''}>↓ ${t("下移")}</button></div>`;
+ const operations=phone
+  ? `<section class="card-action-bar">${editStock}${history}${addLot}</section>`
+  : `<section class="operation-panel">${quoteRefreshButton(s)}${addLot}<div class="secondary-actions">${editStock}</div>${order}${history}</section>`;
+ return `<article class="stock stock-grid" data-stock-id="${s.id}">
+ <section class="base-panel"><div class="stock-name-line"><h2>${esc(s.name)}</h2>${quoteForm(s)}${phone?quoteRefreshButton(s,true):''}</div><dl class="position-metrics stock-position"><div class="position-pnl"><dt>${t("总盈亏")}</dt><dd class="${color(st.total)}" title="${t("总盈亏包含已结算盈亏，成本已抵扣已实现净收益")}">${signed(st.total)} / ${totalPct===null?'—':signed(totalPct)+'%'}</dd></div><div class="market-value"><dt>${t("市值")}</dt><dd title="CNY ${money(st.value)}">${marketWan(st.value)} <small class="market-unit">${st.value===null?'':t("万")}</small></dd></div><div class="position-emphasis"><dt>${t("持仓成本价")}</dt><dd>${priceText(st.qty?(st.cost-s.realized)/st.qty:null)}</dd></div><div class="position-emphasis"><dt>${t("总持仓 / 底仓")}</dt><dd>${money(st.qty,0)} / ${money(st.baseQty,0)} ${t("股")}</dd></div></dl><div class="mobile-capacity">${s.mobileTargetQty?t("机动仓预设 {target} 股 · {status} {remaining} 股",{target:money(s.mobileTargetQty,0),status:t(mobileQty>s.mobileTargetQty?"超出":"剩余"),remaining:`<strong>${money(Math.abs(s.mobileTargetQty-mobileQty),0)}</strong>`}):t("机动仓预设：未设置")}</div></section>
+ ${phone?operations+phoneLots(s,mobile):`<section class="mobile-panel"><div class="table-header"><div class="table-header-grid" role="row"><span role="columnheader">${t("股数")}</span><span role="columnheader">${t("买入价")}</span><span role="columnheader">${t("持有天数")}</span><span role="columnheader">${t("盈亏")}</span><span role="columnheader">${t("盈亏率")}</span><span role="columnheader" title="${t("市值（元）")}">${t("市值/元")}</span><span role="columnheader">${t("买入时间")}</span><span role="columnheader">${t("操作")}</span></div></div><div class="table-wrap" tabindex="0" aria-label="${t("机动仓记录")}"><table aria-label="${t("机动仓明细")}"><colgroup>${columns.map(width=>`<col style="width:${width}%">`).join('')}</colgroup><tbody>${mobile.length?mobile.map(l=>lotRow(s,l)).join(''):`<tr><td colspan="8" class="no-lots">${t("暂无机动仓")}</td></tr>`}</tbody></table></div><div class="table-footer" role="region" aria-label="${t('合计')}"><table aria-label="${t('合计')}"><colgroup>${columns.map(width=>`<col style="width:${width}%">`).join('')}</colgroup>${mobileFooter(s)}</table></div></section>${operations}`}</article>`;
+}
+function lotRow(s,l,phone=false){const age=C.days(l.date),value=s.price===null?null:C.round(s.price*l.qty),pnl=value===null?null:C.round(value-l.cost),pct=pnl===null||!l.cost?null:pnl/l.cost*100;
+ return `<tr><td class="numeric-cell" data-label="${t("股数")}"><span class="numeric-line">${money(l.qty,0)}</span></td><td data-label="${t("买入价")}" title="${t("买入费用")} ${money(l.fee)}"><span class="numeric-line">${priceText(l.price)}</span></td><td class="age-cell" data-label="${t("持有天数")}" title="${l.date||t("买入日期未录入")}"><span>${age===null?t("未知"):`${age}${t("天")}`}</span></td><td data-label="${t("浮动盈亏")}" class="pnl-cell ${color(pnl)}"><span class="pnl-line">${signed(pnl)}</span></td><td data-label="${t("盈亏率")}" class="pnl-cell ${color(pnl)}"><span class="pnl-line">${pct===null?'—':`${signed(pct)}%`}</span></td><td class="value-cell" data-label="${t("市值（元）")}" title="CNY ${money(value)}"><span class="value-line">${money(value)}</span></td>${phone?'':`<td class="purchase-date" data-label="${t("买入时间")}">${l.date?esc(l.date):t("未知")}</td>`}<td class="row-actions"><div class="lot-actions"><button data-action="settle" data-id="${s.id}" data-lot="${l.id}">${t("卖出")}</button><button data-action="edit-lot" data-id="${s.id}" data-lot="${l.id}">${t("更正")}</button></div></td></tr>`;
+}
+function mobileFooter(s,phone=false){const st=C.mobileSummary(s);return `<tfoot><tr class="mobile-summary"><td data-label="${t('总股数')}"><span class="numeric-line">${money(st.qty,0)}</span></td><td data-label="${t('平均买入价')}"><span class="numeric-line">${priceText(st.avgPrice)}</span></td><td data-label="${t('平均持有天数')}"><span class="numeric-line">${st.avgDays===null?'—':money(st.avgDays)+t('天')}</span></td><td data-label="${t('总盈亏')}" class="${color(st.pnl)}"><span class="numeric-line">${signed(st.pnl)}</span></td><td data-label="${t('总盈亏率')}" class="${color(st.pnl)}"><span class="numeric-line">${st.pct===null?'—':signed(st.pct)+'%'}</span></td><td data-label="${t('总市值')}"><span class="numeric-line">${money(st.value)}</span></td>${phone?'':`<td class="summary-label">${t('合计')}</td>`}<td class="row-actions"><button data-action="sell-all" data-id="${s.id}" ${st.qty?'':'disabled'}>${t('全部卖出')}</button></td></tr></tfoot>`;}
 function saleDateField(){return field(t('卖出日期'),'sale-date',C.today(),`type="date" max="${C.today()}" required`);}
 function historyDialog(id,page=0){
  const s=getStock(state,id),summary=C.historySummary(s),pageSize=6;
- openDialog(esc(s.name),t('交易历史'),`<dl class="history-summary">${[{label:'累计净盈亏',pnl:summary.total},...summary.periods.map(p=>({...p,label:p.months===1?'近1个月':p.months===6?'近半年':'近一年'}))].map(p=>`<div><dt>${t(p.label)}</dt><dd class="${color(p.pnl)}">${signed(p.pnl)}</dd></div>`).join('')}</dl><div class="history-table-wrap" aria-label="${t('交易历史')}"><table class="history-table" role="table"><thead role="rowgroup"><tr role="row">${['日期','买卖','股数','成交价','费用/元','净盈亏/元','操作'].map(key=>`<th role="columnheader" scope="col">${t(key)}</th>`).join('')}</tr></thead><tbody id="history-rows" role="rowgroup"></tbody></table></div><div class="history-pagination"><button type="button" id="history-prev">${t('上一页')}</button><span id="history-page" role="status"></span><button type="button" id="history-next">${t('下一页')}</button></div>`,t('关闭'),()=>modal.close(),'',true);
+ openDialog(esc(s.name),t('交易历史'),`<dl class="history-summary">${[{label:'累计净盈亏',pnl:summary.total},...summary.periods.map(p=>({...p,label:p.months===1?'近1个月':p.months===6?'近半年':'近一年'}))].map(p=>`<div><dt>${t(p.label)}</dt><dd class="${color(p.pnl)}">${signed(p.pnl)}</dd></div>`).join('')}</dl><div class="history-table-wrap" aria-label="${t('交易历史')}"><table class="history-table" role="table"><thead role="rowgroup"><tr role="row">${['日期','买卖','股数','成交价','费用/元','净盈亏/元','操作'].map(key=>`<th role="columnheader" scope="col">${t(key)}</th>`).join('')}</tr></thead><tbody id="history-rows" role="rowgroup"></tbody></table></div><div class="history-pagination"><button type="button" id="history-prev">${t('上一页')}</button><span id="history-page" role="status"></span><button type="button" id="history-next">${t('下一页')}</button></div>`,t('关闭'),()=>modal.close(),'','wide');
  $('#dialog-form .modal-foot').remove();
  $('#form-error').remove();
  const draw=()=>{
@@ -129,27 +246,30 @@ function historyRow(s,e,page=0){
 }
 function costImpactHtml(before,after){const impact=C.settlementImpact(before,after),amount=n=>Number(n).toLocaleString('zh-CN',{maximumFractionDigits:6}),change=impact.reduction;return `<div class="cost-impact"><span>${t('持仓成本价变化')}</span>${impact.afterPrice===null?`<strong>${t('已清仓，不再计算持仓成本价')}</strong>`:`<strong>${priceText(impact.beforePrice)} → ${priceText(impact.afterPrice)}</strong><span class="cost-impact-change">${Math.abs(change)<1e-9?t('持仓成本价不变'):t(change>0?'每股降低 {amount} 元':'每股升高 {amount} 元',{amount:amount(Math.abs(change))})}</span>`}</div>`;}
 function settleAllDialog(id){const s=getStock(state,id);openDialog(t('全部卖出机动仓'),esc(s.name),`${field(t('卖出价'),'price',s.price??0,'type="number" min="0.001" step="0.001" required inputmode="decimal"')}${saleDateField()}<div id="sell-all-estimate" class="settle-preview"></div>`,t('确认全部卖出'),async f=>mutate(next=>{const item=getStock(next,id),price=+f.get('price');C.settleMobileAll(item,price,next.settings,f.get('sale-date'));C.quote(item,price,f.get('sale-date'));},t('已结算')));const update=()=>{try{const after=structuredClone(s),result=C.settleMobileAll(after,+readForm($('#dialog-form')).get('price'),state.settings,readForm($('#dialog-form')).get('sale-date'));$('#sell-all-estimate').innerHTML=`<span>${t('净盈亏')} <b class="${color(result.pnl)}">${signed(result.pnl)}</b></span>${costImpactHtml(s,after)}<span>${t('卖出费用')} ${money(result.fees)} · ${t('回收')} ${money(result.net)}</span>`;}catch(e){$('#sell-all-estimate').textContent=I18n.error(e.message);}};$('#dialog-form').addEventListener('input',update);update();}
+function stockCodeField(code=''){
+ return field(t('股票代码（选填）'),'stock-code',code,`type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" placeholder="${t('例如：601628')}"`);
+}
 function stockDialog(){
- openDialog(t("新增股票"),'',`<div class="form-grid">${field(t("股票名称"),'name','',`required maxlength="40" placeholder="${t("例如：中国人寿")}"`)}${field(t("现价"),'price',0,'type="number" min="0.001" step="0.001" required inputmode="decimal"')}${field(t("成本价"),'base-price',0,'type="number" min="0.001" step="0.001" required inputmode="decimal"')}${field(t("底仓手数"),'base-hands',1,'type="number" min="1" step="1" required inputmode="numeric"')}${targetField(0)}</div><div id="base-estimate" class="calculation"></div>`,t("添加"),async f=>mutate(next=>{const name=f.get('name');if(next.stocks.some(s=>s.name.trim().toLowerCase()===name.trim().toLowerCase()))throw Error(t("这只股票已存在。"));next.stocks.push(C.createPosition({name,price:+f.get('price'),basePrice:+f.get('base-price'),baseQty:C.handsToShares(+f.get('base-hands')),mobileAmount:0,mobileTargetQty:C.handsToShares(+f.get('mobile-target-hands'),{allowZero:true})},next.settings));},t("已添加")));
+ openDialog(t("新增股票"),'',`<div class="form-grid">${field(t("股票名称"),'name','',`required maxlength="40" placeholder="${t("例如：中国人寿")}"`)}${stockCodeField()}${field(t("现价"),'price',0,'type="number" min="0.001" step="0.001" required inputmode="decimal"')}${field(t("成本价"),'base-price',0,'type="number" min="0.001" step="0.001" required inputmode="decimal"')}${field(t("底仓手数"),'base-hands',1,'type="number" min="1" step="1" required inputmode="numeric"')}${targetField(0)}</div><div id="base-estimate" class="calculation"></div>`,t("添加"),async f=>mutate(next=>{const name=f.get('name');if(next.stocks.some(s=>s.name.trim().toLowerCase()===name.trim().toLowerCase()))throw Error(t("这只股票已存在。"));next.stocks.push(C.createPosition({name,code:f.get("stock-code"),price:+f.get('price'),basePrice:+f.get('base-price'),baseQty:C.handsToShares(+f.get('base-hands')),mobileAmount:0,mobileTargetQty:C.handsToShares(+f.get('mobile-target-hands'),{allowZero:true})},next.settings));},t("已添加")));
  const form=$('#dialog-form'),update=()=>{const f=readForm(form),p=+f.get('base-price'),q=Math.round(+f.get('base-hands')*100);if(p>0&&q>0){const gross=C.round(p*q),fees=0;$('#base-estimate').innerHTML=`<span>${t("底仓金额")} <b>${money(C.round(gross+fees))}</b></span><span>${t("费用")} <b>${money(fees)}</b></span>`;}else $('#base-estimate').textContent='';};
  form.addEventListener('input',e=>{if(e.target.name==='base-price')e.target.dataset.manual='1';if(e.target.name==='price'&&!form.elements['base-price'].dataset.manual)form.elements['base-price'].value=e.target.value;update();});update();
 }
 function buyDialog(id,tag='mobile',lotId){const s=getStock(state,id),existing=s.lots.find(l=>l.id===lotId);tag=existing?.tag||tag;const opening=existing?.source==='opening';
- openDialog(esc(s.name),existing?(tag==='base'?t("修改股票"):t("更正机动仓")):tag==='base'?t('新增底仓'):t('新增机动仓'),`<div class="form-grid">${field(t(opening?"成本价":"买入价"),'price',existing?.price??s.price??0,'type="number" min="0.001" step="0.001" required inputmode="decimal"')}${field(t("买入手数"),'hands',existing?existing.qty/100:1,'type="number" min="1" step="1" required inputmode="numeric"')}</div>${existing&&tag==='base'?targetField(s.mobileTargetQty):''}${buyDateField(existing?existing.date??'':C.today(),!opening)}<div id="buy-estimate" class="calculation buy-calculation"></div>`,existing?t("保存修改"):t("添加"),async f=>{
+ openDialog(esc(s.name),existing?(tag==='base'?t("修改股票"):t("更正机动仓")):tag==='base'?t('新增底仓'):t('新增机动仓'),`<div class="form-grid">${field(t(opening?"成本价":"买入价"),'price',existing?.price??s.price??0,'type="number" min="0.001" step="0.001" required inputmode="decimal"')}${field(t("买入手数"),'hands',existing?existing.qty/100:1,'type="number" min="1" step="1" required inputmode="numeric"')}</div>${existing&&tag==='base'?stockCodeField(s.code)+targetField(s.mobileTargetQty):''}${buyDateField(existing?existing.date??'':C.today(),!opening)}<div id="buy-estimate" class="calculation buy-calculation"></div>`,existing?t("保存修改"):t("添加"),async f=>{
   const args={price:+f.get('price'),qty:C.handsToShares(+f.get('hands')),tag,date:f.get('date')||null,...(opening?{feeMode:'included'}:{})};
-  const record=async allowTopUp=>mutate(next=>{const item=getStock(next,id);if(existing){C.correctLot(item,existing.id,args,next.settings);if(tag==='base')item.mobileTargetQty=C.handsToShares(+f.get('mobile-target-hands'),{allowZero:true});}else{C.addLot(item,args,next.settings,{allowTopUp});if(tag==='mobile')C.quote(item,args.price);}},t("已保存"));
+  const record=async allowTopUp=>mutate(next=>{const item=getStock(next,id);if(existing){C.correctLot(item,existing.id,args,next.settings);if(tag==='base'){item.code=f.get('stock-code');item.mobileTargetQty=C.handsToShares(+f.get('mobile-target-hands'),{allowZero:true});}}else{C.addLot(item,args,next.settings,{allowTopUp});if(tag==='mobile')C.quote(item,args.price);}},t("已保存"));
   const fees=C.fee(C.round(args.price*args.qty),'buy',s.kind,state.settings),needed=C.round(args.price*args.qty+fees),shortfall=C.round(needed-getStock(state,id).cash.mobile);
   const exhausted=!existing&&tag==='mobile'&&shortfall>0;
   await record(exhausted);
   if(exhausted&&s.budget.mobile>0)toast(t("机动仓金额已耗尽，已记录本笔买入。"));
- },existing&&tag==='base'?deleteStockButton(id):existing?`<button class="danger-text push-left" type="button" data-action="remove-lot" data-id="${id}" data-lot="${lotId}">${t("删除误录")}</button>`:'');
+ },existing&&tag==='base'?deleteStockButton(id):existing?`<button class="danger-text push-left" type="button" data-action="remove-lot" data-id="${id}" data-lot="${lotId}">${t("删除误录")}</button>`:'',!existing&&tag==='mobile'?'lot-entry':'');
  const update=()=>{const f=readForm($('#dialog-form')),price=+f.get('price'),qty=Math.round(+f.get('hands')*100);if(price>0&&qty>0){const same=existing&&price===existing.price&&qty===existing.qty,fee=opening?0:same?existing.fee:C.fee(C.round(price*qty),'buy',s.kind,state.settings);$('#buy-estimate').innerHTML=`<span class="calculation-item"><span>${t("股数")}</span><b>${money(qty,0)}</b></span><span class="calculation-item"><span>${t("费用")}</span><b>${money(fee)}</b></span><span class="calculation-item"><span>${t("总花费")}</span><b>${money(C.round(price*qty+fee))}</b></span>`;}else $('#buy-estimate').textContent='';};$('#dialog-form').addEventListener('input',update);update();
 }
 function targetField(value){return field(t('预设机动仓手数'),'mobile-target-hands',(value??0)/100,'type="number" min="0" max="10000000" step="1" required inputmode="numeric"');}
 function deleteStockButton(id){return `<button class="delete-stock-button" type="button" data-action="delete-stock" data-id="${id}">${t("删除股票")}</button>`;}
 function baseDialog(id){const s=getStock(state,id),base=s.lots.filter(l=>l.tag==='base');
  if(base.length===1){buyDialog(id,'base',base[0].id);return;}
- openDialog(esc(s.name),t("修改股票"),` ${targetField(s.mobileTargetQty)}<div class="base-list">${base.map(l=>`<div><span>${t("买入价")} <b>${priceText(l.price)}</b> · <b>${money(l.qty,0)}</b> ${t("股")}</span><button type="button" data-action="edit-lot" data-id="${id}" data-lot="${l.id}">${t("修改")}</button></div>`).join('')||t("暂无底仓")}</div>`,t("保存修改"),async f=>mutate(next=>{getStock(next,id).mobileTargetQty=C.handsToShares(+f.get("mobile-target-hands"),{allowZero:true});},t("已保存")),deleteStockButton(id));
+ openDialog(esc(s.name),t("修改股票"),`${stockCodeField(s.code)}${targetField(s.mobileTargetQty)}<div class="base-list">${base.map(l=>`<div><span>${t("买入价")} <b>${priceText(l.price)}</b> · <b>${money(l.qty,0)}</b> ${t("股")}</span><button type="button" data-action="edit-lot" data-id="${id}" data-lot="${l.id}">${t("修改")}</button></div>`).join('')||t("暂无底仓")}</div>`,t("保存修改"),async f=>mutate(next=>{const item=getStock(next,id);item.code=f.get('stock-code');item.mobileTargetQty=C.handsToShares(+f.get('mobile-target-hands'),{allowZero:true});},t("已保存")),deleteStockButton(id));
 }
 function settleDialog(id,lotId){const s=getStock(state,id),l=s.lots.find(l=>l.id===lotId);if(!l)throw Error(t("持仓已不存在。"));
  openDialog(t("卖出结算"),`${esc(s.name)} · ${t("当前 {qty} 股",{qty:money(l.qty,0)})}`,`<div class="form-grid">${field(t("卖出价"),'price',s.price??l.price,'type="number" min="0.001" step="0.001" required inputmode="decimal"')}${field(t("卖出手数"),'hands',l.qty/100,`type="number" min="1" max="${Math.floor(l.qty/100)}" step="1" required inputmode="numeric"`)}</div>${saleDateField()}<div id="sell-estimate" class="settle-preview"></div>`,t("确认卖出"),async f=>mutate(next=>{const item=getStock(next,id),price=+f.get('price');C.settle(item,lotId,price,next.settings,C.handsToShares(+f.get('hands')),f.get('sale-date'));C.quote(item,price,f.get('sale-date'));},t("已结算")));
@@ -167,7 +287,7 @@ function confirmDialog(title,body,button,handler){openDialog(title,'',`<p class=
 async function exportData(){if(busy)return;busy=true;try{const backup=structuredClone(state);backup.lastBackup=new Date().toISOString();const blob=new Blob([JSON.stringify({app:'持仓手记',...backup},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`${t("持仓手记")}-${C.today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);await write(backup);toast(t("备份已导出"));}finally{busy=false;}}
 function showImport(data){const n=data.stocks.reduce((n,s)=>n+s.lots.length,0);confirmDialog(t("导入备份"),t("恢复 {stocks} 只股票、{lots} 笔持仓，覆盖当前账本。",{stocks:data.stocks.length,lots:n}),t("覆盖并恢复"),async()=>mutate(next=>{Object.keys(next).forEach(k=>delete next[k]);Object.assign(next,data);},t("已恢复")));}
 async function action(name,el){const id=el.dataset.id,l=el.dataset.lot;if(name==='close'){modal.close();return;}if(!ready){toast(t("本地存储不可用"));return;}
- switch(name){case'history':historyDialog(id);break;case'undo-trade':await mutate(next=>C.undoTrade(getStock(next,id),el.dataset.trade),t('已撤销'));historyDialog(id,+el.dataset.page||0);break;case'sell-all':settleAllDialog(id);break;case'move-up':case'move-down':await mutate(next=>{const index=next.stocks.findIndex(s=>s.id===id),to=index+(name==='move-up'?-1:1);if(index<0||to<0||to>=next.stocks.length)return;[next.stocks[index],next.stocks[to]]=[next.stocks[to],next.stocks[index]];});break;case'add-stock':stockDialog();break;case'edit-stock':baseDialog(id);break;case'buy':buyDialog(id);break;case'base':baseDialog(id);break;case'edit-lot':buyDialog(id,'mobile',l);break;case'settle':settleDialog(id,l);break;case'settings':settingsDialog();break;case'font-size':fontDialog();break;case'language':await mutate(next=>{next.view={...next.view,language:next.view?.language==='en'?'zh':'en'};});$('#toast').classList.remove('show');clearTimeout(toast.timer);break;case'theme':await mutate(next=>{next.view={...next.view,theme:next.view?.theme==='dark'?'light':'dark'};});break;case'export':await exportData();break;case'import':$('#import-file').click();break;
+ switch(name){case'refresh-quote':await refreshQuote(id,el);break;case'history':historyDialog(id);break;case'undo-trade':await mutate(next=>C.undoTrade(getStock(next,id),el.dataset.trade),t('已撤销'));historyDialog(id,+el.dataset.page||0);break;case'sell-all':settleAllDialog(id);break;case'move-up':case'move-down':await mutate(next=>{const index=next.stocks.findIndex(s=>s.id===id),to=index+(name==='move-up'?-1:1);if(index<0||to<0||to>=next.stocks.length)return;[next.stocks[index],next.stocks[to]]=[next.stocks[to],next.stocks[index]];});break;case'add-stock':stockDialog();break;case'edit-stock':baseDialog(id);break;case'buy':buyDialog(id);break;case'base':baseDialog(id);break;case'edit-lot':buyDialog(id,'mobile',l);break;case'settle':settleDialog(id,l);break;case'settings':settingsDialog();break;case'font-size':fontDialog();break;case'language':await mutate(next=>{next.view={...next.view,language:next.view?.language==='en'?'zh':'en'};});$('#toast').classList.remove('show');clearTimeout(toast.timer);break;case'theme':await mutate(next=>{next.view={...next.view,theme:next.view?.theme==='dark'?'light':'dark'};});break;case'export':await exportData();break;case'import':$('#import-file').click();break;
  case'clear':confirmDialog(t("清除全部数据"),t("删除当前账本，只能从已导出的备份恢复。"),t("确认清除"),async()=>mutate(next=>{Object.keys(next).forEach(k=>delete next[k]);Object.assign(next,C.empty());},t("已清空")));break;
  case'delete-stock':confirmDialog(t("删除股票"),t("删除 {name} 的全部持仓和资金记录。",{name:esc(getStock(state,id).name)}),t("确认删除"),async()=>mutate(next=>{next.stocks=next.stocks.filter(s=>s.id!==id);},t("已删除")));break;
  case'remove-lot':confirmDialog(t("删除误录"),getStock(state,id).lots.find(x=>x.id===l)?.source==='opening'?t("移除这笔初始持仓，不改变现金，不产生结算盈亏。"):t("仅用于误录：资金退回，不产生盈亏。真实卖出请点“卖出”。"),t("删除误录"),async()=>mutate(next=>C.removeLot(getStock(next,id),l),t("已删除误录")));break;}

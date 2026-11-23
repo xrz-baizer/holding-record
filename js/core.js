@@ -51,11 +51,11 @@ function initialize(s,entries,cash,price,settings){
  for(const k of ['base','mobile','reserve'])if(!finite(cash[k],0,1e9))throw Error('请填写实际剩余现金，满仓时可填0。');
  s.lots=lots;s.cash={base:round(cash.base),mobile:round(cash.mobile),reserve:round(cash.reserve)};s.capital=round(lots.reduce((n,l)=>n+l.cost,0)+s.cash.base+s.cash.mobile+s.cash.reserve);if(price!==null)quote(s,price);return s;
 }
-function createPosition({name,price,basePrice,baseQty,mobileAmount,mobileTargetQty=0},settings){
+function createPosition({name,code,price,basePrice,baseQty,mobileAmount,mobileTargetQty=0},settings){
  if(!finite(price,.000001,1e7))throw Error('请填写大于0的现价。');
  const initial=lot({price:basePrice,qty:baseQty,tag:'base',source:'opening',feeMode:'included',date:today()},settings,inferKind(name));
  mobileAmount=mobileAmount??initial.cost;if(!finite(mobileAmount,0,1e9))throw Error('机动资金必须是有效的非负金额。');mobileAmount=round(mobileAmount);
- const s=makeStock({name,base:initial.cost,mobile:mobileAmount,reserve:0,mobileTargetQty});
+ const s=makeStock({name,code,base:initial.cost,mobile:mobileAmount,reserve:0,mobileTargetQty});
  initialize(s,[{price:basePrice,qty:baseQty,tag:'base',feeMode:'included',date:today()}],{base:0,mobile:mobileAmount,reserve:0},price,settings);return s;
 }
 

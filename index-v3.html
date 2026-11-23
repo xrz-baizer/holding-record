@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en" data-app="position-journal" class="terminal">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#081015">
+  <title>My holdings</title>
+  <link rel="stylesheet" href="css/styles.css?v=20261123-quote-button-red">
+  <link rel="stylesheet" href="css/mobile.css?v=20261123-quote-button-red">
+  <script defer src="js/core.js?v=20261123-quote-button-red"></script>
+  <script defer src="js/i18n.js?v=20261123-quote-button-red"></script>
+  <script defer src="js/app.js?v=20261123-quote-button-red"></script>
+  <style>
+
+    .terminal {
+      --night:#081015; --deck:#0e1a20; --mint:#70f5cb; --ice:#ebf7fa; --dim:#a1b9c4;
+      --wire:#354950; --sheet:#f0f5f5; --cell:#e3eded; --rule:#c4d3d3; --ink:#172a31; --note:#435961;
+      --mono:ui-monospace,"SFMono-Regular",Consolas,monospace;
+      height:auto;overflow:auto;
+    }
+    .terminal[data-theme=dark] {--sheet:#101c22;--cell:#17282e;--rule:#2c4148;--ink:#ebf3f5;--note:#acbfc5;color-scheme:dark}
+    .terminal body {
+      min-height:100svh;height:auto;overflow:visible;
+      background-color:var(--night);
+      background-image:linear-gradient(#42657410 1px,transparent 1px),linear-gradient(90deg,#42657410 1px,transparent 1px);
+      background-size:32px 32px;color:var(--ink);
+    }
+    .terminal .app-shell {display:block;height:auto;min-height:100svh;max-width:1600px;margin:auto;padding:0 clamp(.65rem,3vw,2.75rem) 3rem}
+    .terminal .summary-sidebar {display:contents}
+    .terminal:lang(en) [lang=zh-CN],.terminal:lang(zh-CN) [lang=en]{display:none}
+    .command-bar {position:relative;z-index:4;display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;padding:1rem 0;color:var(--ice)}
+    .brand {display:flex;align-items:center;gap:.65rem;margin-right:auto;font-weight:700;letter-spacing:-.03em}
+    .terminal-mark {display:inline-block;width:1.8rem;height:1.52rem;transform:skew(-15deg);background:repeating-linear-gradient(to right,var(--mint) 0 19%,transparent 19% 30%);clip-path:polygon(0 74%,100% 0,100% 100%,0 100%)}
+    .terminal .command-bar .primary,.terminal #stocks .empty button {color:#07251e!important;background:var(--mint);border:1px solid #a8ffe2;border-radius:.35rem;font-weight:700;box-shadow:none;min-height:44px}
+    .command-bar summary {cursor:pointer;display:flex;align-items:center;justify-content:center;gap:.5rem;color:var(--ice);border:1px solid var(--wire);border-radius:.35rem;padding:.5rem .8rem;min-height:44px;font-size:.84rem}
+    .command-bar summary::-webkit-details-marker {display:none}
+    .command-bar summary::after {content:"";width:.3rem;height:.3rem;transform:rotate(45deg);border:solid var(--mint);border-width:0 1px 1px 0}
+    .command-bar details {position:relative}
+    .tool-menu {position:absolute;right:0;top:calc(100% + .4rem);background:var(--deck);border:1px solid var(--wire);width:min(15rem,82vw);padding:.45rem;box-shadow:0 14px 45px #0008;max-height:70svh;overflow:auto}
+    .terminal .tool-menu button {width:100%;min-height:44px;margin:0;text-align:start;background:none;box-shadow:none;border:0;border-radius:0;color:var(--ice)!important}
+    .terminal .tool-menu button:hover {background:#24363e}
+    .menu-group+.menu-group {border-top:1px solid var(--wire);padding-top:.25rem;margin-top:.25rem}
+    .terminal .tool-menu .danger-text {color:#ff9aa8!important}
+    .instrument {
+      display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);
+      position:relative;isolation:isolate;border:1px solid var(--wire);border-top:2px solid #78dbbd;
+      background:radial-gradient(ellipse at 74% 60%,#163c43 0,transparent 52%),var(--deck);
+      color:var(--ice);box-shadow:0 .8rem 2.5rem #0002;
+    }
+    .instrument::before {content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background-image:radial-gradient(#a9dce223 .8px,transparent 1px);background-size:10px 10px;mask-image:linear-gradient(to right,transparent,#000)}
+    .readout {padding:clamp(1.1rem,3vw,2.4rem);display:flex;flex-direction:column;justify-content:center;gap:1.3rem;min-width:0}
+    .terminal .sidebar-heading {display:block;margin:0}
+    .terminal .sidebar-heading h1 {margin:0;color:var(--ice);font-size:clamp(2rem,4.3vw,3.4rem);letter-spacing:-.07em;font-weight:650;line-height:1.08}
+    .terminal #overview {display:flex;flex-wrap:wrap;gap:.8rem 1.65rem;width:auto;margin:0;padding:0;background:none;border:0;box-shadow:none}
+    .terminal #overview>div {padding:0;border:0;margin:0;background:none}
+    .terminal #overview .overview-heading {gap:.6rem;justify-content:flex-start}
+    .terminal #overview span {color:var(--dim);font-size:.78rem}
+    .terminal #overview .overview-heading b {font:600 .74rem var(--mono);margin:0}
+    .terminal #overview strong {font:550 clamp(1.6rem,2.7vw,2.5rem)/1.25 var(--mono);letter-spacing:-.065em}
+    .terminal #overview strong:not(.gain):not(.loss),.terminal #overview .neutral {color:var(--ice)!important}
+    .terminal #overview .gain {color:#ff98a9!important}.terminal #overview .loss {color:#6fe4b8!important}
+    .instrument-foot {display:flex;align-items:center;flex-wrap:wrap;gap:.65rem 1rem;font:.72rem var(--mono);color:var(--dim)}
+    .terminal #save-status {color:var(--dim);font:inherit}
+    .instrument-foot time {border-left:1px solid var(--wire);padding-left:1rem}
+    .allocation {display:grid;grid-template-columns:minmax(6.8rem,1fr) minmax(0,1fr);gap:clamp(.65rem,2vw,1.8rem);align-items:center;padding:1.4rem clamp(1rem,2.8vw,2.3rem);border-left:1px solid var(--wire)}
+    .dial {width:min(100%,10.75rem);aspect-ratio:1;margin:auto;position:relative;display:grid;place-items:center;border-radius:50%;background:repeating-conic-gradient(from -90deg,#688d99 0deg .75deg,transparent .75deg 6deg)}
+    .dial::before {content:"";position:absolute;inset:3%;border-radius:50%;background:var(--deck);border:1px solid #48616a}
+    .dial-track {position:absolute;inset:10%;border-radius:50%;background:#29414a;mask:radial-gradient(circle,transparent 54%,#000 55%)}
+    .dial-hub {position:absolute;inset:25%;display:flex;flex-direction:column;align-items:center;justify-content:center;border:1px dashed #44616c;border-radius:50%;color:var(--ice)}
+    .dial-hub b {font:500 clamp(1.45rem,2.7vw,2.7rem)/1 var(--mono);letter-spacing:-.09em}
+    .dial-hub small {font:.52rem var(--mono);color:var(--dim);margin-top:.3rem;letter-spacing:.07em}
+    .allocation-detail {min-width:0}
+    .allocation h2,.section-rule h2 {font-size:.88rem;letter-spacing:.035em;font-weight:600;color:var(--ice);margin:0}
+    #allocation-list {list-style:none;margin:.65rem 0 0;padding:0;max-height:10.5rem;overflow:auto}
+    #allocation-list li+li {border-top:1px solid #ffffff16}
+    .terminal #allocation-list button {display:grid;grid-template-columns:.42rem minmax(0,1fr) auto;align-items:center;gap:.45rem;width:100%;min-height:2rem;height:auto;padding:.36rem 0;text-align:left;border:0;border-radius:0;background:none;box-shadow:none;color:var(--ice)!important;font-size:.78rem}
+    #allocation-list button::before {content:"";height:.42rem;background:var(--segment)}
+    #allocation-list button span {overflow-wrap:anywhere;white-space:normal}
+    #allocation-list b {font:.73rem var(--mono)}
+    #allocation-list button:hover span {text-decoration:underline;text-underline-offset:.2em}
+    .allocation-note {font-size:.77rem;line-height:1.5;color:var(--dim)}
+    .section-rule {display:flex;align-items:center;gap:.85rem;margin:1.5rem 0 .75rem}
+    .section-rule::after {content:"";height:1px;flex:1;background:var(--wire)}
+    .terminal #stocks {display:grid;gap:.85rem;grid-template-columns:minmax(0,1fr);grid-auto-rows:auto;grid-template-rows:none;overflow:visible;height:auto;min-height:0;padding:0}
+    .terminal #stocks .stock-grid,.terminal #stocks .empty {margin:0;min-height:0;height:auto;background:var(--sheet);color:var(--ink);border:1px solid var(--rule);border-radius:.35rem;box-shadow:none;backdrop-filter:none}
+    .terminal #stocks :is(.base-panel,.mobile-panel,.operation-panel,.table-wrap,.table-header,.table-footer) {background:none;box-shadow:none;border-color:var(--rule)}
+    .terminal #stocks .stock-name-line h2 {color:var(--ink);font-weight:700;letter-spacing:-.04em}
+    .terminal #stocks :is(.table-header,.table-footer,.operation-panel) {background:var(--cell)}
+    .terminal #stocks :is(.market-value,.position-emphasis) dd {color:var(--ink)}
+    .terminal #stocks :is(dt,.mobile-capacity) {color:var(--note)}
+    .terminal #stocks :is(dd,.stock-current-price,.numeric-line,.pnl-line,.value-line) {font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.04em}
+    .terminal #stocks button {border-radius:.32rem;box-shadow:none}
+    .terminal #stocks .empty {padding:2.2rem 1rem;text-align:center}
+    .terminal #stocks .empty p {color:var(--note)}
+    .terminal :is(button,summary,input,.stock-grid):focus-visible {outline:2px solid #339bd1;outline-offset:2px}
+    @media(min-width:951px) {
+      .terminal #stocks .stock-grid {grid-template-columns:minmax(0,1fr) clamp(8.5rem,15%,12rem);grid-template-rows:auto auto}
+      .terminal #stocks .base-panel {grid-area:1/1;padding:1.15rem 1.25rem .7rem;border:0}
+      .terminal #stocks .stock-position {display:grid;grid-template-columns:repeat(auto-fit,minmax(7.6rem,1fr));gap:.65rem;margin:.7rem 0}
+      .terminal #stocks .stock-position>div {display:grid;justify-content:start;gap:.2rem;border:0;padding:0}
+      .terminal #stocks .stock-position dd {margin:0}
+      .terminal #stocks .mobile-panel {grid-area:2/1;padding:.3rem 1.25rem 1.05rem;height:auto;max-height:none;border:0}
+      .terminal #stocks .table-wrap {flex:1 1 auto;max-height:16rem}
+      .terminal #stocks .operation-panel {grid-area:1/2/3/3;justify-content:center}
+    }
+    @media(max-width:950px) {
+      .instrument {grid-template-columns:minmax(0,1fr)}
+      .allocation {border-left:0;border-top:1px solid var(--wire);grid-template-columns:minmax(6rem,8.2rem) minmax(0,1fr)}
+    }
+    @media(min-width:761px) and (max-width:950px) and (pointer:fine) {
+      .terminal #stocks .stock-grid {grid-template-columns:minmax(0,1fr) 9rem}
+      .terminal #stocks .base-panel {grid-area:1/1}
+      .terminal #stocks .operation-panel {grid-area:1/2}
+      .terminal #stocks .mobile-panel {grid-area:2/1/3/3;height:auto;max-height:none}
+      .terminal #stocks .table-wrap {flex:1 1 auto;max-height:16rem}
+    }
+    @media(max-width:760px),(max-width:950px) and (pointer:coarse) {
+      .terminal #stocks .stock-grid {grid-template-columns:minmax(0,1fr)}
+      .command-bar {gap:.3rem}.brand {font-size:.85rem}
+      .terminal #allocation-list button {min-height:44px}
+    }
+    @media(prefers-reduced-motion:reduce) {.terminal * {scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="summary-sidebar">
+      <div class="command-bar">
+        <div class="brand"><i class="terminal-mark" aria-hidden="true"></i><span lang="zh-CN">持仓终端</span><span lang="en">Holdings Terminal</span></div>
+        <button class="primary" data-action="add-stock">＋ Add stock</button>
+        <details id="tools-menu">
+          <summary><span lang="zh-CN">工具</span><span lang="en">Tools</span></summary>
+          <div class="tool-menu">
+            <div class="menu-group">
+              <button data-action="settings">Fees</button>
+              <button data-action="export">Export</button>
+              <button data-action="import">Import</button>
+            </div>
+            <div class="menu-group">
+              <button id="font-size-button" data-action="font-size">Font</button>
+              <button id="theme-button" data-action="theme">Theme</button>
+              <button id="language-button" data-action="language">Language</button>
+            </div>
+            <div class="menu-group"><button class="danger-text" data-action="clear">Clear</button></div>
+          </div>
+        </details>
+      </div>
+      <div class="instrument">
+        <div class="readout">
+          <div class="sidebar-heading"><h1>My holdings</h1></div>
+          <section id="overview" class="overview" aria-label="Portfolio summary"></section>
+          <div class="instrument-foot"><span id="save-status" role="status">Loading</span><time id="ledger-date"></time></div>
+        </div>
+        <section class="allocation" aria-labelledby="allocation-heading">
+          <div class="dial" aria-hidden="true"><div class="dial-track"></div><div class="dial-hub"><b id="holding-count">—</b><small><span lang="zh-CN">持仓标的</span><span lang="en">POSITIONS</span></small></div></div>
+          <div class="allocation-detail"><h2 id="allocation-heading"><span lang="zh-CN">持仓市值占比</span><span lang="en">Portfolio weights</span></h2><ul id="allocation-list"></ul></div>
+        </section>
+      </div>
+    </header>
+    <div class="section-rule"><h2><span lang="zh-CN">持仓明细</span><span lang="en">Position detail</span></h2></div>
+    <section id="stocks" aria-label="Stocks and trading lots"></section>
+  </main>
+  <dialog id="modal"><div id="modal-content"></div></dialog>
+  <input id="import-file" type="file" accept=".json,application/json" hidden>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script>
+    const toolsMenu = document.querySelector('#tools-menu');
+    document.addEventListener('click', event => {
+      if (!toolsMenu.open) return;
+      const picked = event.target.closest('#tools-menu button');
+      if (picked || !toolsMenu.contains(event.target)) toolsMenu.open = false;
+      if (picked) toolsMenu.querySelector('summary').focus();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && toolsMenu.open) {
+        toolsMenu.open = false;
+        toolsMenu.querySelector('summary').focus();
+      }
+    });
+    // The shared renderer replaces the stock list after every successful ledger write.
+    document.addEventListener('DOMContentLoaded', () => {
+      const panel = document.querySelector('#stocks');
+      const legend = document.querySelector('#allocation-list');
+      const palette = ['#70f5cb', '#76acff', '#c29bff', '#ffd080', '#ff94aa', '#78dbe9'];
+      function paintAllocation() {
+        const zh = document.documentElement.lang.startsWith('zh');
+        const rows = state.stocks.map((stock, i) => ({ name: stock.name, i, ...C.stats(stock) }))
+          .filter(row => row.qty > 0).sort((a,b) => (b.value ?? 0) - (a.value ?? 0));
+        const total = rows.reduce((sum,row) => sum + (row.value ?? 0), 0);
+        const complete = rows.every(row => row.value !== null) && total > 0;
+        const stops = [];
+        let end = 0;
+        legend.replaceChildren();
+        document.querySelector('#holding-count').textContent = String(rows.length).padStart(2,'0');
+        const date = document.querySelector('#ledger-date');
+        date.dateTime = C.today();
+        date.textContent = date.dateTime + (zh ? ' 北京' : ' UTC+8');
+        for (const [rank,row] of rows.entries()) {
+          const color = palette[rank % palette.length];
+          const share = complete ? row.value / total * 100 : null;
+          if (complete) {
+            const start = end;
+            end += share;
+            stops.push(color+' '+start+'% '+end+'%');
+          }
+          const item = document.createElement('li'), link = document.createElement('button');
+          link.type = 'button';
+          link.style.setProperty('--segment', color);
+          const name = document.createElement('span'), percent = document.createElement('b');
+          name.textContent = row.name;
+          percent.textContent = complete ? share.toFixed(1)+'%' : '—';
+          link.append(name, percent);
+          link.addEventListener('click', () => {
+            const card = panel.children[row.i];
+            card.tabIndex = -1;
+            card.focus({preventScroll:true});
+            card.scrollIntoView({block:'center'});
+          });
+          item.append(link); legend.append(item);
+        }
+        if (!complete) {
+          const hint = document.createElement('li');
+          hint.className = 'allocation-note';
+          hint.textContent = rows.length ? (zh ? '市值不完整，暂无占比' : 'Weights unavailable') : (zh ? '添加持仓后显示占比' : 'Add a position to see its weight');
+          legend.append(hint);
+        }
+        document.querySelector('.dial-track').style.background = complete
+          ? 'conic-gradient(from -90deg,'+stops.join(',')+')' : '#29414a';
+      }
+      new MutationObserver(paintAllocation).observe(panel, {childList:true});
+      paintAllocation();
+    });
+  </script>
+</body>
+</html>

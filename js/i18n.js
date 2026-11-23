@@ -1,6 +1,7 @@
 'use strict';
 const I18n=(()=>{
  const messages={
+ "股票操作":"Stock actions",
  "总花费":"Total cost",
  "选择买入日期":"Choose buy date",
  "增加0.01元":"Increase by CNY 0.01",
@@ -96,6 +97,18 @@ const I18n=(()=>{
   "现价": "Current price",
   "更新": "Update",
   "更新现价": "Update price",
+  "刷新现价": "Refresh price",
+  "填写股票代码以刷新现价": "Enter a stock code to refresh the price",
+  "股票代码（选填）": "Stock code (optional)",
+  "例如：601628": "e.g. 601628",
+  "请输入支持的六位 A 股代码。": "Enter a supported six-digit A-share code.",
+  "正在获取行情…": "Fetching quote…",
+  "行情请求失败，请稍后重试。": "Could not fetch the quote. Try again later.",
+  "行情请求太频繁，请稍后重试。": "Too many quote requests. Try again later.",
+  "未查到有效行情，请检查股票代码。": "No valid quote found. Check the stock code.",
+  "请先按回车保存手动输入的价格。": "Press Enter to save the price you entered first.",
+  "页面已变更，请重新刷新价格。": "The holdings page has changed. Refresh the price again.",
+  "价格已更新 · 腾讯财经 {time}": "Price updated · Tencent Finance {time}",
   "底仓": "Core",
   "机动仓": "Trading lot",
   "设置": "Settings",
