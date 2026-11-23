@@ -8,6 +8,11 @@
   const stocks = document.querySelector('#stocks');
   const pageCount = document.querySelector('#phone-page-count');
   const stockName = document.querySelector('#phone-stock-name');
+  const stockCode = document.querySelector('#phone-stock-code');
+  const stockTools = document.querySelector('#mobile-stock-tools');
+  const heading = document.querySelector('#sidebar-title');
+  const editStock = stockTools.querySelector('[data-action="edit-stock"]');
+  const history = stockTools.querySelector('[data-action="history"]');
   const modal = document.querySelector('#modal');
   const viewport = window.visualViewport;
   let frame;
@@ -29,8 +34,16 @@
     if (!phone.matches) return;
     const index = phonePageIndex(stocks);
     const current = stocks.children[index];
+    const stockId = current?.dataset.stockId,code = current?.dataset.stockCode;
     const name = current?.querySelector('h2')?.textContent || I18n.t('我的持仓');
     if (stockName.textContent !== name) stockName.textContent = name;
+    stockCode.hidden = !code;
+    stockCode.textContent = code || '';
+    stockTools.hidden = !stockId;
+    for (const trigger of [editStock,history]) trigger.dataset.id = stockId || '';
+    editStock.textContent = I18n.t('修改股票');
+    history.textContent = I18n.t('交易历史');
+    toggle.setAttribute('aria-label', I18n.t('菜单'));
     const count = stocks.children.length;
     pageCount.hidden = count < 2;
     const position = count > 1 ? (index + 1) + ' / ' + count : '';
@@ -50,6 +63,8 @@
     else stocks.before(sidebar);
     bar.hidden = !phone.matches;
     close.hidden = !phone.matches;
+    heading.toggleAttribute('autofocus',phone.matches);
+    if (!phone.matches) stockTools.hidden = true;
     if (changed) {
       const drafts = new Map([...stocks.querySelectorAll('.quote-badge input[data-dirty]')].map(input=>[input.form.dataset.stock,input.value]));
       render();
@@ -64,9 +79,11 @@
 
   toggle.addEventListener('click', () => {
     close.setAttribute('aria-label', I18n.t('关闭'));
+    trackStock();
+    drawer.scrollTop = 0;
     drawer.showModal();
     reflectOpen();
-    close.focus({preventScroll:true});
+    heading.focus({preventScroll:true});
   });
   drawer.addEventListener('close', reflectOpen);
   drawer.addEventListener('click', event => {

@@ -46,7 +46,7 @@ function addLot(s,args,settings,{allowTopUp=false}={}){const l=lot(args,settings
  s.cash[group]=round(s.cash[group]-l.cost);s.lots.push(l);recordBuy(s,l,round(s.capital-capitalBefore));if(s.price===null)quote(s,l.price,l.date||today());return l;
 }
 function initialize(s,entries,cash,price,settings){
- if(s.lots.length||s.realized)throw Error('已有记录的股票不能重复初始化。');if(!entries.length)throw Error('请至少录入一笔已有持仓，或选择新建空仓。');
+ if(s.lots.length||s.realized||s.reverseTrades?.length)throw Error('已有记录的股票不能重复初始化。');if(!entries.length)throw Error('请至少录入一笔已有持仓，或选择新建空仓。');
  const lots=entries.map(e=>lot({...e,date:e.date||null,source:'opening'},settings,s.kind));
  for(const k of ['base','mobile','reserve'])if(!finite(cash[k],0,1e9))throw Error('请填写实际剩余现金，满仓时可填0。');
  s.lots=lots;s.cash={base:round(cash.base),mobile:round(cash.mobile),reserve:round(cash.reserve)};s.capital=round(lots.reduce((n,l)=>n+l.cost,0)+s.cash.base+s.cash.mobile+s.cash.reserve);if(price!==null)quote(s,price);return s;
@@ -59,9 +59,116 @@ function createPosition({name,code,price,basePrice,baseQty,mobileAmount,mobileTa
  initialize(s,[{price:basePrice,qty:baseQty,tag:'base',feeMode:'included',date:today()}],{base:0,mobile:mobileAmount,reserve:0},price,settings);return s;
 }
 
+function reverseRemaining(trade){
+ const qty=trade.qty-trade.covers.reduce((sum,cover)=>sum+cover.qty,0);
+ return {qty,net:reverseNet(trade,qty)};
+}
+const reverseNet=(trade,qty)=>round(round(round(trade.price*trade.qty)-trade.fee)*qty/trade.qty);
+function pendingReverse(s){
+ return (s.reverseTrades??[]).reduce((total,trade)=>{
+  const open=reverseRemaining(trade);
+  return {qty:total.qty+open.qty,net:round(total.net+open.net)};
+ },{qty:0,net:0});
+}
+function reverseSummary(s){
+ let qty=0,net=0,prices=0,age=0;
+ for(const trade of s.reverseTrades??[]){
+  const open=reverseRemaining(trade);
+  qty+=open.qty;net+=open.net;prices+=trade.price*open.qty;age+=days(trade.date)*open.qty;
+ }
+ net=round(net);
+ const value=qty===0?0:s.price===null?null:round(s.price*qty);
+ const pnl=value===null?null:round(net-value);
+ return {qty,value,pnl,avgPrice:qty?prices/qty:null,avgDays:qty?age/qty:null,pct:net>0&&pnl!==null?pnl/net*100:null};
+}
+function checkReverseExecution({price,qty,date}){
+ if(!finite(price,.000001,1e7)||!Number.isSafeInteger(qty)||qty<1||qty>1e9||price*qty>1e12||!validDate(date)||date>today())throw Error('请输入有效的成交价、股数和日期。');
+}
+function openReverse(s,args,settings){
+ checkReverseExecution(args);
+ const {qty,price,date}=args;
+ if(qty>stats(s).baseQty)throw Error('反T卖出股数不能超过当前底仓。');
+ const gross=round(price*qty),fees=fee(gross,'sell',s.kind,settings);
+ if(fees>=gross)throw Error('卖出费用必须小于成交金额。');
+ const trade={id:uid(),qty,price,date,fee:fees,covers:[]};
+ (s.reverseTrades??=[]).push(trade);
+ s.cash.mobile=round(s.cash.mobile+gross-fees);
+ return trade;
+}
+function coverReverse(s,id,args,settings){
+ const trade=(s.reverseTrades??[]).find(trade=>trade.id===id);
+ if(!trade)throw Error('记录已不存在。');
+ checkReverseExecution(args);
+ const {qty,price}=args,open=reverseRemaining(trade);
+ if(qty>open.qty)throw Error('买回股数不能超过这笔反T的剩余股数。');
+ checkCoverDate(trade,args.date);
+ return recordReverseCover(s,trade,args,fee(round(price*qty),'buy',s.kind,settings));
+}
+function checkCoverDate(trade,date){
+ if(date<trade.date||date<(trade.covers.at(-1)?.date??trade.date))throw Error('买回日期不能早于卖出或上次买回日期。');
+}
+function recordReverseCover(s,trade,{qty,price,date},fees){
+ const open=reverseRemaining(trade),cost=round(round(price*qty)+fees);
+ const net=round(open.net-reverseNet(trade,open.qty-qty));
+ const pnl=round(net-cost),balance=round(s.cash.mobile-cost),topUp=Math.max(0,-balance);
+ const cover={id:uid(),qty,price,date,fee:fees,pnl,topUp};
+ trade.covers.push(cover);
+ s.cash.mobile=round(balance+topUp);
+ s.capital=round(s.capital+topUp);
+ s.realized=round(s.realized+pnl);
+ return cover;
+}
+function coverReverseAll(s,{price,date},settings){
+ const lots=(s.reverseTrades??[]).map(trade=>({trade,qty:reverseRemaining(trade).qty})).filter(lot=>lot.qty>0);
+ if(!lots.length)throw Error('暂无待买回的反T。');
+ const qty=lots.reduce((sum,lot)=>sum+lot.qty,0);
+ checkReverseExecution({price,qty,date});
+ for(const lot of lots)checkCoverDate(lot.trade,date);
+ const gross=round(lots.reduce((sum,lot)=>sum+round(price*lot.qty),0));
+ const fees=fee(gross,'buy',s.kind,settings);
+ let sharesCovered=0,allocatedFee=0;
+ return lots.map(lot=>{
+  sharesCovered+=lot.qty;
+  const cumulativeFee=round(fees*sharesCovered/qty),lotFee=round(cumulativeFee-allocatedFee);
+  allocatedFee=cumulativeFee;
+  return recordReverseCover(s,lot.trade,{price,date,qty:lot.qty},lotFee);
+ });
+}
+function reverseEntries(s){
+ return (s.reverseTrades??[]).flatMap(trade=>[
+  {id:trade.id,date:trade.date,price:trade.price,qty:trade.qty,fee:trade.fee,type:'reverse-sell',pnl:null},
+  ...trade.covers.map(cover=>({...cover,type:'reverse-buy'}))
+ ]);
+}
+function reverseUndoReason(s,id){
+ for(const trade of s.reverseTrades??[]){
+  if(trade.id===id){
+   if(trade.covers.length)return '请先撤销这笔仓位后续的交易。';
+   return s.cash.mobile<reverseRemaining(trade).net?'可用资金不足，无法撤销这笔反T卖出。':'';
+  }
+  if(trade.covers.some(cover=>cover.id===id))return trade.covers.at(-1).id===id?'':'请先撤销这笔仓位后续的交易。';
+ }
+ return '交易记录已不存在。';
+}
+function undoReverse(s,id){
+ const reason=reverseUndoReason(s,id);
+ if(reason)throw Error(reason);
+ const trade=s.reverseTrades.find(trade=>trade.id===id||trade.covers.at(-1)?.id===id);
+ if(trade.id===id){
+  s.cash.mobile=round(s.cash.mobile-reverseRemaining(trade).net);
+  s.reverseTrades=s.reverseTrades.filter(item=>item!==trade);
+ }else{
+  const cover=trade.covers.pop();
+  s.cash.mobile=round(s.cash.mobile+round(cover.qty*cover.price)+cover.fee-cover.topUp);
+  s.capital=round(s.capital-cover.topUp);
+  s.realized=round(s.realized-cover.pnl);
+ }
+}
+
 function settle(s,id,price,settings,qty,date=today()){
  const l=s.lots.find(l=>l.id===id);if(!l)throw Error('这笔持仓已不存在。');if(!finite(price,.000001,1e7))throw Error('请输入有效卖出价格。');
  qty=qty??l.qty;if(!Number.isSafeInteger(qty)||qty<=0||qty>l.qty)throw Error('卖出股数不能超过这笔剩余持仓。');
+ if(l.tag==='base'&&qty>stats(s).baseQty)throw Error('请保留尚未买回的反T股数。');
  checkSaleDate([l],date);const before=[snapshotLot(s,l)];
  const remain=l.qty-qty,remainingFee=remain?round(l.fee*remain/l.qty):0,remainingCost=remain?round(l.price*remain+remainingFee):0,soldCost=round(l.cost-remainingCost);
  const gross=round(price*qty),fees=fee(gross,'sell',s.kind,settings),net=round(gross-fees),pnl=round(net-soldCost),group=groupOf(l.tag);
@@ -70,9 +177,10 @@ function settle(s,id,price,settings,qty,date=today()){
  if(remain){l.qty=remain;l.fee=remainingFee;l.cost=remainingCost;}else s.lots=s.lots.filter(x=>x.id!==id);
  recordSale(s,{date,price,qty,fee:fees,cost:soldCost,pnl,legs},before);return {net,pnl,fees,remaining:remain};
 }
-function removeLot(s,id){const l=s.lots.find(x=>x.id===id);if(!l)throw Error('记录已不存在。');if(l.tag==='mobile'&&!s.history.entries.some(e=>e.type==='sell'&&e.legs.some(x=>x.lotId===id)))s.history.entries=s.history.entries.filter(e=>!e.legs.some(x=>x.lotId===id));if(l.source==='opening')s.capital=round(s.capital-l.cost);else s.cash[groupOf(l.tag)]=round(s.cash[groupOf(l.tag)]+l.cost);s.lots=s.lots.filter(x=>x.id!==id);}
+function removeLot(s,id){const l=s.lots.find(x=>x.id===id);if(!l)throw Error('记录已不存在。');if(l.tag==='base'&&l.qty>stats(s).baseQty)throw Error('请保留尚未买回的反T股数。');if(l.tag==='mobile'&&!s.history.entries.some(e=>e.type==='sell'&&e.legs.some(x=>x.lotId===id)))s.history.entries=s.history.entries.filter(e=>!e.legs.some(x=>x.lotId===id));if(l.source==='opening')s.capital=round(s.capital-l.cost);else s.cash[groupOf(l.tag)]=round(s.cash[groupOf(l.tag)]+l.cost);s.lots=s.lots.filter(x=>x.id!==id);}
 function correctLot(s,id,args,settings){
  const old=s.lots.find(l=>l.id===id);if(!old)throw Error('记录已不存在。');const next=lot({...args,id,source:old.source,feeMode:old.source==='opening'?(args.feeMode||old.feeMode||'included'):'auto'},settings,s.kind);
+ if(old.tag==='base'&&old.qty-(next.tag==='base'?next.qty:0)>stats(s).baseQty)throw Error('请保留尚未买回的反T股数。');
  if(old.price===next.price&&old.qty===next.qty&&old.feeMode===next.feeMode){next.fee=old.fee;next.cost=old.cost;}
  if(['price','qty','feeMode','fee','cost','tag','date'].every(key=>old[key]===next[key]))return old;
  if(old.source==='opening'){s.capital=round(s.capital+next.cost-old.cost);s.lots=s.lots.map(l=>l.id===id?next:l);syncBuyCorrection(s,next,0);return next;}
@@ -105,8 +213,8 @@ function settleMobileAll(s,price,settings,date=today()){
  recordSale(s,{date,price,qty:st.qty,fee:fees,cost:st.cost,pnl,legs:lots.map(historyLeg)},before);return {net,pnl,fees};
 }
 function stats(s){
- const cost=round(s.lots.reduce((n,l)=>n+l.cost,0)),qty=s.lots.reduce((n,l)=>n+l.qty,0),value=qty===0?0:s.price===null?null:round(s.price*qty),cash=round(s.cash.base+s.cash.mobile+s.cash.reserve);
- const base=s.lots.filter(l=>l.tag==='base'),baseCost=round(base.reduce((n,l)=>n+l.cost,0)),baseQty=base.reduce((n,l)=>n+l.qty,0),mobileCost=round(s.lots.filter(l=>l.tag==='mobile').reduce((n,l)=>n+l.cost,0));
+ const pending=pendingReverse(s),bookCost=round(s.lots.reduce((n,l)=>n+l.cost,0)),cost=round(bookCost-pending.net),qty=s.lots.reduce((n,l)=>n+l.qty,0)-pending.qty,value=qty===0?0:s.price===null?null:round(s.price*qty),cash=round(s.cash.base+s.cash.mobile+s.cash.reserve);
+ const base=s.lots.filter(l=>l.tag==='base'),baseCost=round(base.reduce((n,l)=>n+l.cost,0)-pending.net),baseQty=base.reduce((n,l)=>n+l.qty,0)-pending.qty,mobileCost=round(s.lots.filter(l=>l.tag==='mobile').reduce((n,l)=>n+l.cost,0));
  return {cost,qty,value,cash,float:value===null?null:round(value-cost),total:value===null?null:round(value-cost+s.realized),equity:value===null?null:round(value+cash),baseCost,baseQty,adjusted:baseQty?(baseCost-s.realized)/baseQty:null,mobileCost};
 }
 function settlementImpact(before,after){
@@ -161,7 +269,7 @@ function monthsBefore(date,months){
  first.setUTCDate(Math.min(d,last));return first.toISOString().slice(0,10);
 }
 function historySummary(s,until=today()){
- const sales=s.history.entries.filter(e=>e.type==='sell'&&e.date<=until),sum=entries=>round(entries.reduce((n,e)=>n+e.pnl,0));
+ const sales=[...s.history.entries,...reverseEntries(s)].filter(e=>e.pnl!==null&&e.date<=until),sum=entries=>round(entries.reduce((n,e)=>n+e.pnl,0));
  return {total:sum(sales),recorded:sum(sales),opening:s.history.openingRealized,
   periods:[1,6,12].map(months=>({months,from:monthsBefore(until,months),pnl:sum(sales.filter(e=>e.date>=monthsBefore(until,months)))}))};
 }
@@ -218,6 +326,29 @@ function validateHistory(history,realized,getId){
  if(Math.abs(round(history.openingRealized+entries.reduce((n,e)=>n+(e.type==='sell'?e.pnl:0),0))-realized)>.02)fail();
  return {openingRealized:history.openingRealized,entries};
 }
+function validateReverseTrades(trades,getId){
+ const fail=()=>{throw Error('反T交易记录无效。');};
+ if(!Array.isArray(trades)||trades.length>20000)fail();
+ let coverCount=0;
+ return trades.map(trade=>{
+  if(!trade||!Array.isArray(trade.covers)||!finite(trade.fee,0)||trade.fee>=round(trade.price*trade.qty))fail();
+  checkReverseExecution(trade);
+  coverCount+=trade.covers.length;if(coverCount>50000)fail();
+  const clean={id:getId(trade.id),date:trade.date,price:trade.price,qty:trade.qty,fee:trade.fee,covers:[]};
+  let remaining=trade.qty,lastDate=trade.date;
+  for(const cover of trade.covers){
+   if(!cover)fail();
+   checkReverseExecution(cover);
+   const gross=round(cover.qty*cover.price),cost=round(gross+cover.fee);
+   if(cover.qty>remaining||cover.date<lastDate||!finite(cover.fee,0)||!finite(cover.topUp,0,cost))fail();
+   const pnl=round(reverseNet(clean,remaining)-reverseNet(clean,remaining-cover.qty)-cost);
+   if(!finite(cover.pnl)||Math.abs(cover.pnl-pnl)>.001)fail();
+   clean.covers.push({id:getId(cover.id),date:cover.date,price:cover.price,qty:cover.qty,fee:cover.fee,pnl,topUp:cover.topUp});
+   remaining-=cover.qty;lastDate=cover.date;
+  }
+  return clean;
+ });
+}
 function validate(input){
  const r=migrate(input);if(!r||r.version!==4||!Array.isArray(r.stocks)||r.stocks.length>300)throw Error('不是受支持的持仓备份。');
  const fontPercent=r.view?.fontPercent??120;if(!Number.isInteger(fontPercent)||fontPercent<80||fontPercent>160)throw Error('字号百分比应为80至160。');
@@ -231,11 +362,13 @@ function validate(input){
   if(!finite(s.capital)||!finite(s.realized))throw Error('资金数据无效。');t.capital=s.capital;t.realized=s.realized;
   if(!Array.isArray(s.lots)||s.lots.length>20000||!Array.isArray(s.quotes)||s.quotes.length>30000)throw Error('记录数量无效。');
   t.lots=s.lots.map(l=>{const clean=lot({...l,id:getId(l.id)},settings,t.kind);if(!finite(l.fee,0)||!finite(l.cost,0)||Math.abs(l.cost-round(l.price*l.qty+l.fee))>.02||(l.feeMode|| (l.source==='opening'?'included':'auto'))==='included'&&l.fee!==0)throw Error('持仓成本数据无效。');clean.fee=l.fee;clean.cost=l.cost;return clean;});
-  t.history=validateHistory(s.history,t.realized,getId);
+  if(s.reverseTrades!==undefined)t.reverseTrades=validateReverseTrades(s.reverseTrades,getId);
+  const reversePnl=reverseEntries(t).reduce((sum,entry)=>sum+(entry.pnl??0),0);
+  t.history=validateHistory(s.history,round(t.realized-reversePnl),getId);
   const dates=new Set();t.quotes=s.quotes.map(q=>{if(!validDate(q.date)||q.date>today()||!finite(q.price,.000001,1e7)||dates.has(q.date))throw Error('报价数据无效。');dates.add(q.date);return{date:q.date,price:q.price};}).sort((a,b)=>a.date.localeCompare(b.date));t.price=t.quotes.at(-1)?.price??null;t.priceDate=t.quotes.at(-1)?.date??null;
-  const st=stats(t);if(Math.abs(st.cash+st.cost-t.capital-t.realized)>.1)throw Error('现金、持仓与盈亏无法对账。');return t;
+  const st=stats(t);if(st.baseQty<0||Math.abs(st.cash+st.cost-t.capital-t.realized)>.1)throw Error('现金、持仓与盈亏无法对账。');return t;
  });
  if(new Set(stocks.filter(s=>s.code).map(s=>s.code)).size!==stocks.filter(s=>s.code).length)throw Error('股票代码重复。');return {version:4,settings,view:{fontPercent,theme,language},stocks,lastBackup:typeof r.lastBackup==='string'?r.lastBackup:null};
 }
-root.LedgerCore={round,today,uid,validDate,days,defaults,empty,fee,makeStock,addLot,initialize,settle,removeLot,correctLot,configure,quote,stats,migrate,validate,groupOf,inferKind,createPosition,handsToShares,holdingTotals,sortedMobileLots,mobileSummary,settleMobileAll,settlementImpact,historySummary,monthsBefore,undoReason,undoTrade};if(typeof module!=='undefined')module.exports=root.LedgerCore;
+root.LedgerCore={round,today,uid,validDate,days,defaults,empty,fee,makeStock,addLot,initialize,settle,removeLot,correctLot,configure,quote,stats,migrate,validate,groupOf,inferKind,createPosition,handsToShares,holdingTotals,sortedMobileLots,mobileSummary,settleMobileAll,settlementImpact,historySummary,monthsBefore,undoReason,undoTrade,openReverse,coverReverse,coverReverseAll,reverseRemaining,reverseSummary,reverseEntries,reverseUndoReason,undoReverse};if(typeof module!=='undefined')module.exports=root.LedgerCore;
 })(globalThis);

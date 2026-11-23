@@ -168,3 +168,98 @@ test('tampered undo snapshots are rejected at import',()=>{
   const bad=structuredClone(state);mutate(bad.stocks[0].history.entries.at(-1));assert.throws(()=>C.validate(bad));
  }
 });
+
+test('reverse sales reduce actual shares, then partial buybacks restore shares and realize net P&L',()=>{
+ const state=C.empty(),date=C.today();
+ const stock=C.createPosition({name:'Stock',code:'000001',price:10,basePrice:10,baseQty:1000,mobileAmount:0},state.settings);
+ state.stocks.push(stock);
+ const opening=C.stats(stock);
+ const sell=C.openReverse(stock,{price:11,qty:300,date},state.settings);
+ const firstFill=C.stats(stock);
+ assert.equal(firstFill.qty,700);
+ assert.equal(firstFill.baseQty,700);
+ assert.equal(firstFill.total,C.round(300-sell.fee));
+ assert.equal(stock.realized,0);
+ assert.throws(()=>C.openReverse(stock,{price:11,qty:800,date},state.settings),/不能超过/);
+ assert.throws(()=>C.coverReverse(stock,sell.id,{price:9,qty:400,date},state.settings),/不能超过/);
+ const first=C.coverReverse(stock,sell.id,{price:9,qty:100,date},state.settings);
+ assert.equal(C.stats(stock).qty,800);
+ assert.equal(C.reverseRemaining(sell).qty,200);
+ assert.equal(first.pnl,C.round(200-sell.fee/3-first.fee));
+ assert.equal(C.historySummary(stock).total,first.pnl);
+ C.validate(state);
+ const last=C.coverReverse(stock,sell.id,{price:9,qty:200,date},state.settings);
+ assert.equal(C.stats(stock).qty,1000);
+ assert.equal(C.historySummary(stock).total,C.round(600-sell.fee-first.fee-last.fee));
+ assert.deepEqual(C.validate(state),state);
+ const bad=structuredClone(state);
+ bad.stocks[0].reverseTrades[0].covers[0].pnl+=1;
+ assert.throws(()=>C.validate(bad),/反T交易记录无效/);
+ assert.throws(()=>C.undoReverse(stock,sell.id),/先撤销/);
+ C.undoReverse(stock,last.id);C.undoReverse(stock,first.id);C.undoReverse(stock,sell.id);
+ assert.deepEqual(C.stats(stock),opening);
+ assert.equal(C.historySummary(stock).total,0);
+ C.validate(state);
+});
+
+test('a loss-making buyback can use added funds and undo restores the pending sale',()=>{
+ const state=C.empty(),date=C.today();
+ const stock=C.createPosition({name:'Stock',code:'000001',price:10,basePrice:10,baseQty:300,mobileAmount:0},state.settings);
+ state.stocks.push(stock);
+ const sell=C.openReverse(stock,{price:10,qty:300,date},state.settings),cash=stock.cash.mobile,capital=stock.capital;
+ assert.equal(C.stats(stock).qty,0);
+ const cover=C.coverReverse(stock,sell.id,{price:12,qty:300,date},state.settings);
+ assert.ok(cover.topUp>600);
+ assert.equal(stock.cash.mobile,0);
+ assert.equal(cover.pnl,-cover.topUp);
+ C.validate(state);
+ C.undoReverse(stock,cover.id);
+ assert.equal(stock.cash.mobile,cash);
+ assert.equal(stock.capital,capital);
+ assert.equal(stock.realized,0);
+ C.validate(state);
+});
+
+test('reverse summary counts only pending shares and their apportioned sale proceeds',()=>{
+ const state=C.empty(),date=C.today();
+ const s=C.createPosition({name:'Stock',code:'000001',price:10,basePrice:10,baseQty:1000,mobileAmount:5000},state.settings);
+ C.addLot(s,{price:8,qty:100,date},state.settings);
+ const first=C.openReverse(s,{price:11,qty:300,date},state.settings);
+ C.coverReverse(s,first.id,{price:10,qty:100,date},state.settings);
+ const second=C.openReverse(s,{price:12,qty:100,date},state.settings);
+ const expectedNet=C.round(C.reverseRemaining(first).net+C.reverseRemaining(second).net);
+ const summary=C.reverseSummary(s);
+ assert.equal(summary.qty,300);
+ assert.equal(summary.avgPrice,3400/300);
+ assert.equal(summary.value,3000);
+ assert.equal(summary.pnl,C.round(expectedNet-3000));
+ assert.equal(summary.pct,summary.pnl/expectedNet*100);
+ assert.equal(C.mobileSummary(s).qty,100);
+ s.price=null;
+ assert.equal(C.reverseSummary(s).pnl,null);
+});
+
+test('bulk buyback settles all open shares at one price and allocates one commission',()=>{
+ const state=C.empty(),date=C.today();
+ state.settings.minimum=5;
+ const stock=C.createPosition({name:'Stock',code:'000001',price:10,basePrice:10,baseQty:1500,mobileAmount:0},state.settings);
+ state.stocks.push(stock);
+ const first=C.openReverse(stock,{price:11,qty:300,date:'2025-01-02'},state.settings);
+ const second=C.openReverse(stock,{price:12,qty:100,date},state.settings);
+ C.coverReverse(stock,first.id,{price:10,qty:100,date:'2025-01-03'},state.settings);
+ const before=structuredClone(stock),net=C.round(C.reverseRemaining(first).net+C.reverseRemaining(second).net);
+ assert.throws(()=>C.coverReverseAll(stock,{price:10,date:'2025-01-04'},state.settings),/买回日期不能早于/);
+ assert.deepEqual(stock,before);
+ const covers=C.coverReverseAll(stock,{price:10,date},state.settings);
+ const fees=C.fee(3000,'buy',stock.kind,state.settings);
+ assert.deepEqual(covers.map(cover=>cover.qty),[200,100]);
+ assert.equal(C.round(covers.reduce((sum,cover)=>sum+cover.fee,0)),fees);
+ assert.equal(stock.realized,C.round(before.realized+net-3000-fees));
+ assert.equal(C.stats(stock).baseQty,1500);
+ assert.equal(C.reverseSummary(stock).qty,0);
+ C.validate(state);
+ assert.throws(()=>C.coverReverseAll(stock,{price:10,date},state.settings),/暂无待买回/);
+ for(const cover of covers)C.undoReverse(stock,cover.id);
+ assert.deepEqual(stock,before);
+ C.validate(state);
+});

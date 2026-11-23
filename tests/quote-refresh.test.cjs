@@ -79,11 +79,17 @@ test('phone cards use aligned table sections and bind portrait refresh to the co
  const {stock,run}=setup(()=>{});
  const html=run('stockCard(state.stocks[0],true)');
  const table=html.match(/<div class="phone-table-scroll"[^>]*><table>([\s\S]*?)<\/table>/)[1];
- assert.equal((table.match(/<col /g)||[]).length,7);
+ const header=html.match(/<div class="phone-table-head"[^>]*><table>([\s\S]*?)<\/table>/)[1];
+ assert.match(header,/<colgroup span="7"><\/colgroup>/);
+ assert.match(table,/<colgroup span="7"><\/colgroup>/);
+ assert.match(header,/<thead>/);
+ assert.match(table,/<thead class="lot-table-accessible-head">/);
  assert.equal((table.match(/<th scope="col"/g)||[]).length,7);
- for(const section of ['tbody','tfoot']){
-  const row=table.match(new RegExp('<'+section+'><tr[^>]*>([\\s\\S]*?)</tr>'))[1];
-  assert.equal((row.match(/<td[ >]/g)||[]).length,7);
+ const groups=[...table.matchAll(/<tbody[^>]*>([\s\S]*?)<\/tbody>/g)];
+ assert.equal(groups.length,1);
+ for(const [,rows] of groups){
+  const footer=rows.match(/<tr class="trade-summary"[^>]*>([\s\S]*?)<\/tr>/)[1];
+  assert.equal((footer.match(/<td[ >]/g)||[]).length,7);
  }
  assert.ok(!html.includes('data-open-stock'));
  assert.match(html,/class="stock-name-line">[\s\S]*?<\/form><button class="quote-refresh quote-icon"/);
@@ -100,16 +106,21 @@ test('phone cards keep their editable quote and omit the date column in both pop
  assert.ok(phone.includes('data-stock="'+stock.id+'"'));
  assert.doesNotMatch(phone,/class="purchase-date"|Swipe to see all columns|>Total</);
  assert.match(desktop,/class="purchase-date"/);
- assert.ok(phone.indexOf('class="base-panel"') < phone.indexOf('class="card-action-bar"'));
- assert.ok(phone.indexOf('class="card-action-bar"') < phone.indexOf('class="phone-lots"'));
- const bar=phone.match(/<section class="card-action-bar">(.*?)<\/section>/)[1];
- assert.doesNotMatch(bar,/data-action="move-(?:up|down)"/);
- assert.match(desktop,/data-action="move-up"/);
- assert.match(desktop,/data-action="move-down"/);
- for(const action of ['edit-stock','history','buy']){
-  assert.ok(bar.includes('data-action="'+action+'" data-id="'+stock.id+'"'));
+ assert.doesNotMatch(phone,/class="card-action-bar"|class="phone-lots-heading"/);
+ for(const action of ['edit-stock','history','move-up','move-down']){
+  assert.ok(desktop.includes('data-action="'+action+'" data-id="'+stock.id+'"'));
+  assert.ok(!phone.includes('data-action="'+action+'" data-id="'+stock.id+'"'));
  }
- assert.match(run('phoneLots(state.stocks[0],[])'),/<td colspan="7">/);
+ assert.match(phone,/<div class="mobile-lot-tools"><div class="mobile-capacity">.*?<\/div><button[^>]*class="primary mobile-lot-button"[^>]*data-action="buy"/);
+ assert.ok(phone.includes('data-action="buy" data-id="'+stock.id+'"'));
+ assert.ok(desktop.includes('data-action="buy" data-id="'+stock.id+'"'));
+ assert.doesNotMatch(desktop,/class="mobile-lot-tools"/);
+ assert.match(run('stockCodeField()'),/required inputmode="numeric" pattern="\[0-9\]\{6\}"/);
+ for(const phoneLayout of [true,false]){
+  const empty=run(`lotsPanel({...state.stocks[0],lots:[]},${phoneLayout})`);
+  assert.match(empty,/<thead>/);
+  assert.doesNotMatch(empty,/<tbody|trade-summary|No trading lots/);
+ }
 });
 
 test('switching the pinned stock during a quote request updates only the original stock',async()=>{
@@ -151,20 +162,86 @@ test('the visible stock and its table position survive a render or reorder',()=>
  assert.deepEqual(deck.children[0].table,{scrollTop:0,scrollLeft:0});
 });
 
-test('sticky table surfaces gain backing only while they cover other cells',()=>{
+test('the phone header tracks horizontal position without changing color on vertical scroll',()=>{
  const {context,run}=setup(()=>{});
- const active=new Set();
+ const active=new Set(),headerActive=new Set();
+ const frameStyle=new Map();
+ const toggles=set=>({toggle(name,on){if(on)set.add(name);else set.delete(name);}});
+ const header={scrollLeft:0,classList:toggles(headerActive)};
  const viewport={scrollHeight:300,clientHeight:100,scrollTop:0,scrollLeft:0,
-  classList:{toggle(name,on){if(on)active.add(name);else active.delete(name);}}};
+  parentElement:{style:{setProperty(name,value){frameStyle.set(name,value);}}},
+  matches:selector=>selector==='.phone-table-scroll',previousElementSibling:header,classList:toggles(active)};
  context.viewport=viewport;
- const check=(top,left,expected)=>{
-  Object.assign(viewport,{scrollTop:top,scrollLeft:left});
-  run('syncTableScroll(viewport)');
-  assert.deepEqual(active,new Set(expected));
- };
- check(0,0,['has-more-rows','foot-over-data']);
- check(50,100,['has-more-rows','foot-over-data','head-over-data','frozen-over-data']);
- check(200,0,['has-more-rows','head-over-data']);
- viewport.scrollHeight=100;
- check(0,0,[]);
+ run('syncTableScroll(viewport)');
+ assert.deepEqual(active,new Set(['has-more-rows']));
+ viewport.scrollTop=50;
+ viewport.scrollLeft=100;
+ run('syncTableScroll(viewport)');
+ assert.equal(header.scrollLeft,100);
+ assert.equal(frameStyle.get('--lot-scroll-left'),'100px');
+ assert.deepEqual(headerActive,new Set(['frozen-over-data']));
+ assert.deepEqual(active,new Set(['has-more-rows','frozen-over-data']));
+ viewport.scrollTop=200;
+ viewport.scrollLeft=0;
+ run('syncTableScroll(viewport)');
+ assert.equal(header.scrollLeft,0);
+ assert.equal(frameStyle.get('--lot-scroll-left'),'0px');
+ assert.equal(headerActive.size,0);
+ assert.deepEqual(active,new Set(['has-more-rows']));
+ viewport.matches=()=>false;
+ Object.assign(viewport,{offsetWidth:400,clientWidth:385,scrollLeft:60});
+ header.style={};
+ run('syncTableScroll(viewport)');
+ assert.equal(header.style.marginInlineEnd,'15px');
+ assert.equal(header.scrollLeft,60);
+ assert.ok(!active.has('head-over-data'));
+});
+
+test('reverse sales and buybacks appear on both stock layouts and in history',()=>{
+ const {stock,ledger,run}=setup(()=>{});
+ for(const price of [7,8])C.addLot(stock,{price,qty:100},ledger.settings,{allowTopUp:true});
+ const trade=C.openReverse(stock,{price:11,qty:100,date:C.today()},ledger.settings);
+ for(const phone of [true,false]){
+  const card=run(`stockCard(state.stocks[0],${phone})`);
+  assert.match(card,/class="reverse-row"/);
+  assert.doesNotMatch(card,/reverse-label|data-action="edit-lot"/);
+  assert.ok(card.includes('data-action="settle" data-id="'+stock.id+'"'));
+  assert.ok(card.includes('data-action="cover-reverse" data-id="'+stock.id+'" data-lot="'+trade.id+'"'));
+  assert.equal((card.match(/<thead>/g)||[]).length,1);
+  assert.equal((card.match(/<table[ >]/g)||[]).length,2);
+  assert.doesNotMatch(card,/class="trade-group-title"/);
+  const summaries=[...card.matchAll(/<tr class="trade-summary"[^>]*>([\s\S]*?)<\/tr>/g)];
+  assert.equal(summaries.length,2);
+  assert.match(summaries[0][1],/data-action="sell-all"/);
+  assert.doesNotMatch(summaries[1][1],/data-action="sell-all"/);
+  assert.match(summaries[1][1],/data-action="cover-all"/);
+  const firstGroup=card.match(/<tbody aria-label="Buy first">([\s\S]*?)<\/tbody>/)[1];
+  assert.equal((firstGroup.match(/data-action="settle"/g)||[]).length,3);
+  assert.ok(firstGroup.lastIndexOf('data-action="settle"')<firstGroup.indexOf('class="trade-summary"'));
+  if(!phone){
+   const head=card.match(/<div class="trade-panel-head"[^>]*>([\s\S]*?)<\/div>/)[1];
+   const body=card.match(/<div class="trade-panel-scroll"[^>]*>([\s\S]*?)<\/div>/)[1];
+   assert.match(head,/<colgroup span="9"><\/colgroup><thead>/);
+   assert.doesNotMatch(head,/<tbody/);
+   assert.match(body,/<colgroup span="9"><\/colgroup><thead class="lot-table-accessible-head">/);
+   assert.match(head,/<th scope="col">Type<\/th>/);
+   assert.match(card,/<td>Buy first<\/td>/);
+   assert.match(card,/<td>Sell first<\/td>/);
+   for(const [,summary] of summaries){
+    assert.equal((summary.match(/<td[ >]/g)||[]).length,9);
+    assert.match(summary,/<td><\/td><td><\/td>\s*<td class="row-actions">/);
+   }
+  }
+
+ }
+ const chinese=run("I18n.setLanguage('zh');stockCard(state.stocks[0],true)");
+ assert.match(chinese,/aria-label="全部卖出">全部<br>卖出<\/button>/);
+ assert.match(chinese,/aria-label="全部买回">全部<br>买回<\/button>/);
+ run("I18n.setLanguage('en')");
+ assert.match(run('historyRow(state.stocks[0],C.reverseEntries(state.stocks[0])[0])'),/Reverse sale.*data-action="undo-reverse"/);
+ const reverseOnly=run('lotsPanel({...state.stocks[0],lots:[]},true)');
+ assert.match(reverseOnly,/<tbody aria-label="Sell first">/);
+ assert.doesNotMatch(reverseOnly,/<tbody aria-label="Buy first">|No trading lots/);
+ C.coverReverse(stock,trade.id,{price:9,qty:100,date:C.today()},ledger.settings);
+ assert.doesNotMatch(run('stockCard(state.stocks[0],true)'),/data-action="cover-(?:reverse|all)"|<tbody aria-label="Sell first">/);
 });

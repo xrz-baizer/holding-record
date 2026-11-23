@@ -132,8 +132,6 @@
  .operation-panel>.history-button{grid-column:1/-1;grid-row:4;max-width:none;width:100%;min-height:2.75rem;margin-top:0}
  .mobile-panel>.table-wrap{border-left:0;border-right:0}
  .mobile-panel .table-footer td:first-child,.mobile-panel .table-footer td:last-child{padding:0}
- .mobile-panel .lot-actions{display:flex;width:100%;gap:.375rem}
- .mobile-panel .lot-actions button,html[lang=en] .mobile-panel .lot-actions button{flex:1;width:auto;min-width:0;min-height:2.75rem;padding:.375rem .25rem;font-size:.875rem}
  dialog.wide:has(.history-table){width:calc(100% - 1rem);max-width:40rem;height:min(40rem,calc(100dvh - 2rem))}
  .history-summary{gap:.875rem 1rem}
  .history-summary>div{flex:1 1 calc(50% - 1rem);min-width:0}
@@ -169,12 +167,12 @@
     display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;
     max-height:calc(var(--lot-room) - 2px);padding:0;
   }
-  .lot-entry .modal-head {
+  #modal .modal-head {
     display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:.5rem;
     align-items:center;margin:0;padding:10px var(--lot-gutter);
   }
-  .lot-entry .modal-head h2 {overflow-wrap:anywhere}
-  .lot-entry .modal-head button {width:44px;height:44px;min-width:44px;min-height:44px;padding:0}
+  #modal .modal-head h2 {overflow-wrap:anywhere}
+  #modal .modal-head button {width:44px;height:44px;min-width:44px;min-height:44px;padding:0}
   .lot-entry-body {min-height:0;overflow:auto;overscroll-behavior:contain;padding:2px var(--lot-gutter) .5rem}
   .lot-entry-body .field {margin-bottom:.6rem}
   .lot-entry-body .form-grid {grid-template-columns:minmax(0,1fr)}
@@ -190,28 +188,49 @@
     margin:0;padding:10px var(--lot-gutter);border-top:1px solid var(--line);
   }
   .lot-entry .modal-foot button {min-height:44px}
+  .lot-entry .modal-foot .delete-stock-button {grid-column:1/-1;margin-top:0}
+  #modal.wide:has(.history-table) {
+    width:calc(100% - 1rem);max-width:40rem;height:auto;
+    max-height:calc(var(--lot-view-height,100dvh) - max(.5rem,env(safe-area-inset-top)) - max(.5rem,env(safe-area-inset-bottom)));
+    overflow:auto;
+  }
+  #modal.wide #modal-content,#modal.wide #dialog-form {height:auto}
+  #modal.wide #dialog-form {display:flex;flex-direction:column;padding:.6rem;gap:.5rem;container-type:normal}
+  #modal.wide .modal-head {padding:0}
+  #modal.wide .modal-head h2 {white-space:normal;overflow-wrap:anywhere}
+  #modal.wide .history-summary {display:grid;grid-template-columns:repeat(auto-fit,minmax(6.5rem,1fr));gap:.45rem}
+  #modal.wide .history-summary > div {min-width:0}
+  #modal.wide .history-summary dd {font-size:1rem}
+  #modal.wide .history-table-wrap {max-height:48dvh;overflow:auto}
+  #modal.wide .history-table {height:auto;min-width:32rem;--history-columns:17% 16% 10% 13% 12% 19% 13%}
+  #modal.wide .history-table :is(thead,tbody) {display:block}
+  #modal.wide .history-table thead {position:sticky;top:0;z-index:1;background:var(--table-backing)}
+  #modal.wide .history-table tbody td {min-height:42px;font-size:.75rem;padding-inline:.35rem;white-space:normal}
+  #modal.wide .history-table .history-undo {height:auto;min-height:36px;padding:.1rem .25rem}
+  #modal.wide .history-placeholder,#modal.wide .history-pagination[hidden] {display:none}
   /* A landscape keyboard can leave too little space for fixed header and footer rows. */
   #modal.lot-entry[data-short-view] #dialog-form {display:block;max-height:none}
   #modal.lot-entry[data-short-view] .lot-entry-body {overflow:visible}
 }
 
-#phone-bar[hidden], #drawer-close[hidden] { display: none; }
+#phone-bar[hidden], #drawer-close[hidden], #mobile-stock-tools[hidden] {display:none}
+#modal-title:focus,#sidebar-title:focus {outline:none}
+#drawer-close:focus:not(:focus-visible),.modal-head button:focus:not(:focus-visible) {outline:none}
 html.drawer-open, html.drawer-open body { overflow: hidden; }
 
 @media (max-width:760px), (max-width:950px) and (pointer:coarse) {
   :root {
-    --phone-bar-height:calc(env(safe-area-inset-top,0px) + max(44px,2.5rem) + .5rem + 1px);
+    --phone-menu-height:max(36px,1.9rem);
+    --phone-bar-height:calc(env(safe-area-inset-top,0px) + var(--phone-menu-height) + .5rem + 1px);
     --phone-nav-glass:linear-gradient(135deg,#f4f8ff8c,#d7e7fc68);
     --phone-panel-glass:linear-gradient(145deg,#ffffff42,#e5efff18);
     --phone-drawer-glass:linear-gradient(145deg,#f4f8ffc9,#dbe9f7a6);
-    --phone-frozen-glass:linear-gradient(135deg,#f4f9ff60,#cedff63d);
     --table-backing:#e0eaf8;
   }
   :root[data-theme=dark] {
     --phone-nav-glass:linear-gradient(135deg,#263953ab,#1e304a85);
     --phone-panel-glass:linear-gradient(145deg,#a9caff1c,#32476430);
     --phone-drawer-glass:linear-gradient(145deg,#23354bd6,#182a41b8);
-    --phone-frozen-glass:linear-gradient(135deg,#7896be32,#20364e60);
     --table-backing:#27384e;
   }
   #phone-bar,#mobile-drawer,.stock-grid > .base-panel {
@@ -226,15 +245,18 @@ html.drawer-open, html.drawer-open body { overflow: hidden; }
   }
   #phone-bar:not([hidden]) + .app-shell {
     box-sizing:border-box;height:100vh;height:100dvh;min-height:0;
+    display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);
+    align-items:stretch;align-content:stretch;gap:0;
     padding-top:calc(var(--phone-bar-height) + .4rem);
     padding-bottom:max(.4rem,env(safe-area-inset-bottom));
     overflow:hidden;
   }
   #phone-bar strong { font-size: 1rem; }
-  html:lang(en) #phone-bar [lang="zh-CN"], html:lang(zh-CN) #phone-bar [lang="en"] { display: none; }
   #drawer-toggle {
-    display: inline-flex; align-items: center; gap: .45rem; justify-content: center;
-    height: max(44px,2.5rem); min-height: 44px; padding: 0 .75rem; font-size: .875rem;
+    display:grid;place-items:center;flex:none;width:44px;
+    height:var(--phone-menu-height);min-height:var(--phone-menu-height);padding:0;
+    border:0;border-radius:0;background:none;box-shadow:none;
+    -webkit-backdrop-filter:none;backdrop-filter:none;
   }
   .menu-lines { width: 1rem; height: 2px; background: currentColor; box-shadow: 0 -5px currentColor, 0 5px currentColor; }
   #mobile-drawer {
@@ -270,14 +292,14 @@ html.drawer-open, html.drawer-open body { overflow: hidden; }
 @media (max-width:760px), (max-width:950px) and (pointer:coarse) {
   .phone-nav-row {display:flex;align-items:center;gap:.5rem}
   #stocks.stock-pages {
-    display:flex;height:100%;min-height:0;gap:0;padding:0;
+    grid-column:1;grid-row:1;display:flex;height:100%;min-height:0;gap:0;padding:0;
     overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;
     scroll-snap-type:y mandatory;scrollbar-width:none;scrollbar-gutter:auto;
   }
   #stocks.stock-pages::-webkit-scrollbar {display:none}
   #stocks.stock-pages > .stock-grid {
     box-sizing:border-box;flex:0 0 100%;height:100%;min-height:0;margin:0;
-    display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:fit-content(56%) auto minmax(0,1fr);
+    display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:fit-content(50%) minmax(0,1fr);
     gap:.5rem;padding:1px;border:0;border-radius:0;background:transparent;
     box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none;
     overflow:hidden;scroll-snap-align:start;scroll-snap-stop:always;
@@ -290,81 +312,79 @@ html.drawer-open, html.drawer-open body { overflow: hidden; }
   .stock-pages .stock-name-line {margin-bottom:.35rem}
   .stock-pages .base-panel {overflow:auto;padding:.55rem .75rem}
   .stock-pages .stock-position {margin:.25rem 0}
-  .stock-pages .base-panel .mobile-capacity {margin-top:.35rem;font-size:.8rem}
-  #phone-stock-name {flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  #phone-page-count {white-space:nowrap;font-size:.75rem;color:var(--muted);font-variant-numeric:tabular-nums}
-  .card-action-bar {
-    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.25rem .4rem;
-    align-items:center;padding:0 .1rem;
+  .mobile-lot-tools {
+    display:flex;flex-wrap:wrap;align-items:center;gap:.35rem .5rem;margin-top:.45rem;
   }
-  .card-action-bar button {min-width:0;min-height:44px;padding:.2rem .25rem;line-height:1.15;font-size:.78rem;white-space:normal}
+  .stock-pages .mobile-lot-tools .mobile-capacity {
+    flex:1 1 11.5em;min-width:0;margin:0;padding:0;border:0;font-size:.8rem;
+  }
+  .mobile-lot-tools .mobile-lot-button {
+    flex:none;min-height:35px;margin-inline-start:auto;padding:.25rem .65rem;
+    border-radius:999px;font-size:.78rem;line-height:1.2;
+  }
+  .phone-stock-label {display:flex;align-items:baseline;flex:1;min-width:0;gap:.35rem}
+  #phone-stock-name {min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #phone-page-count {white-space:nowrap;font-size:.75rem;color:var(--muted);font-variant-numeric:tabular-nums}
+  #phone-stock-code {font-size:.73rem;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+  #mobile-stock-tools:not([hidden]) {grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}
+  #mobile-drawer #mobile-stock-tools > button:first-child {grid-column:auto}
+  #mobile-drawer #mobile-stock-tools > button {font-size:.85rem}
   @media (orientation:landscape) and (min-width:520px) {
     .stock-pages .base-panel {
       display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:.25rem .75rem;align-items:start;
     }
     .stock-pages .stock-name-line {grid-area:1/1}
-    .stock-pages .base-panel .mobile-capacity {grid-area:2/1}
+    .stock-pages .mobile-lot-tools {grid-area:2/1;align-self:end}
     .stock-pages .stock-position {grid-area:1/2/3/3}
   }
   .phone-lots {
-    --shares-width:2.8rem;
-    --table-band:linear-gradient(145deg,#b9d4ff28,#599af911);
+    --lot-text-size:.8rem;
     --table-edge:#ffffff90;
-    --table-highlight:#ffffff80;
-    min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);
-    padding:.4rem .35rem;
+    min-width:0;min-height:0;display:grid;grid-template-rows:minmax(0,1fr);
+    padding:.35rem;
   }
-  .phone-lots-heading {margin:0 0 .4rem;font-size:.94rem}
   .phone-table-frame {
-    min-height:0;border:1px solid var(--table-edge);border-radius:.625rem;overflow:hidden;
+    min-height:0;padding:var(--lot-bar-inset);border:1px solid var(--table-edge);border-radius:.625rem;overflow:hidden;
+    display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);
     isolation:isolate;clip-path:inset(0 round .625rem);
     background:linear-gradient(135deg,#a9ccf420,#bed6fa0b);
   }
+  .phone-table-head {min-width:0;overflow:hidden}
   .phone-table-scroll:focus {outline:none}
-  .phone-lots:has(.phone-table-scroll:focus-visible) .phone-lots-heading {text-decoration:underline;text-underline-offset:.15em}
-  .phone-table-scroll {height:100%;overflow:auto;overscroll-behavior-x:contain;scrollbar-width:none}
+  .phone-table-scroll {position:relative;min-width:0;min-height:0;overflow:auto;overscroll-behavior-x:contain;scrollbar-width:none}
   .phone-table-scroll.has-more-rows {overscroll-behavior-y:contain}
-  .phone-table-scroll.frozen-over-data {--frozen-backing:var(--table-backing)}
-  .phone-table-scroll.head-over-data thead,.phone-table-scroll.foot-over-data tfoot {background-color:var(--table-backing)}
+  :is(.phone-table-scroll,.phone-table-head).frozen-over-data {--frozen-backing:var(--table-backing)}
   .phone-table-scroll::-webkit-scrollbar {display:none;width:0;height:0}
-  .phone-lots table {display:table;width:100%;min-width:max(28rem,calc(22rem + 100px));table-layout:fixed;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
-  .phone-lots .col-shares {width:var(--shares-width)}
-  .phone-lots .col-price {width:3.15rem}
-  .phone-lots .col-actions {width:max(100px,5.6rem)}
+  .phone-lots table {display:table;width:100%;min-width:max(26.25rem,350px);table-layout:fixed;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
   .phone-lots th:nth-child(n) {width:auto}
   .phone-lots colgroup {display:table-column-group}
   .phone-lots thead {display:table-header-group}
   .phone-lots tbody {display:table-row-group}
-  .phone-lots tfoot {display:table-footer-group}
   .phone-lots tr {display:table-row}
-  .phone-lots :is(table,thead,tbody,tfoot,tr,td) {background:transparent}
-  .phone-lots :is(td,th) {display:table-cell;width:auto;height:auto;line-height:1.2;padding:.125rem .22rem;text-align:center;white-space:nowrap;font-size:.73rem;border:0;border-bottom:1px solid var(--line)}
-  .phone-lots :is(.numeric-line,.pnl-line,.value-line) {display:inline-block;font-size:calc(.73rem * var(--pnl-scale,1));line-height:1.2;white-space:nowrap}
-  .phone-lots :is(th,td):nth-child(-n+2):not([colspan]) {
-    position:sticky;left:0;z-index:1;background:var(--phone-frozen-glass) var(--frozen-backing,transparent);
-    -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
+  .phone-lots :is(table,thead,tbody,tr,td) {background:transparent}
+  .phone-lots :is(td,th) {display:table-cell;width:auto;height:auto;line-height:1.25;padding:.375rem .22rem;text-align:center;vertical-align:middle;white-space:nowrap;font-size:var(--lot-text-size);border:0;border-bottom:1px solid var(--line)}
+  .phone-lots :is(.numeric-line,.pnl-line,.value-line) {display:inline-block;font-size:calc(var(--lot-text-size) * var(--pnl-scale,1));line-height:1.25;white-space:nowrap}
+  .phone-lots :is(th,td):first-child:not([colspan]) {
+    position:sticky;left:0;z-index:1;
   }
-  .phone-lots :is(th,td):nth-child(2):not([colspan]) {left:var(--shares-width);box-shadow:1px 0 0 var(--line)}
+  /* Cut moving cells at the frozen-column edge before they reach its rounded corners. */
+  .phone-table-head.frozen-over-data th:nth-child(n+2),
+  .phone-table-scroll.frozen-over-data .trade-summary td:nth-child(n+2) {
+    clip-path:inset(0 0 0 clamp(0px,calc(var(--lot-scroll-left,0px) - var(--lot-column-offset,0) * 100%),100%));
+  }
+  .phone-lots :is(th,td):nth-child(3) {--lot-column-offset:1}
+  .phone-lots :is(th,td):nth-child(4) {--lot-column-offset:2}
+  .phone-lots :is(th,td):nth-child(5) {--lot-column-offset:3}
+  .phone-lots :is(th,td):nth-child(6) {--lot-column-offset:4}
+  .phone-lots :is(th,td):nth-child(7) {--lot-column-offset:5}
+  .phone-lots tbody tr:not(.trade-summary) td:first-child:not([colspan]) {background-color:var(--frozen-backing,transparent)}
   .phone-lots td::before {display:none}
-  .phone-lots thead,.phone-lots tfoot {
-    position:sticky;z-index:2;background:var(--table-band);
-    -webkit-backdrop-filter:blur(20px) saturate(145%);backdrop-filter:blur(20px) saturate(145%);
-    box-shadow:inset 0 1px 0 var(--table-highlight);
-  }
-  .phone-lots thead {top:0}
-  .phone-lots tfoot {bottom:0}
-  .phone-lots th,.phone-lots tfoot td {
-    padding-block:.25rem;font-size:.7rem;font-weight:750;vertical-align:middle;
-  }
-  .phone-lots th {background:transparent;border-color:var(--table-edge);white-space:normal;color:var(--muted)}
-  .phone-lots tfoot td {border-top:1px solid var(--table-edge);border-bottom:0}
-  .phone-lots .lot-actions {display:flex;justify-content:center;gap:.15rem}
-  .phone-lots .row-actions button,html[lang=en] .phone-lots .row-actions button {min-width:44px;min-height:max(30px,1.75rem);line-height:1.2;margin:0;padding:.125rem .2rem;font-size:.7rem}
+  .phone-lots th {padding-block:.75rem;white-space:normal;color:inherit}
+  .phone-lots .trade-summary td {padding-block:.45rem}
+  .phone-lots .row-actions button,html[lang=en] .phone-lots .row-actions button {min-width:44px;max-width:100%;min-height:max(30px,1.75rem);line-height:1.2;margin:0;padding:.125rem .2rem;font-size:.7rem;white-space:normal;overflow-wrap:anywhere}
   .phone-lots [data-action=settle],.phone-lots [data-action=sell-all] {color:#b33b50}
   [data-theme=dark] .phone-lots {
-    --table-band:linear-gradient(145deg,#86b5fc17,#8ba9d60b);
     --table-edge:#bfd8ff24;
-    --table-highlight:#ffffff16;
   }
   [data-theme=dark] .phone-lots :is([data-action=settle],[data-action=sell-all]) {color:#f7a0b2!important}
   .stock-name-line .quote-icon {display:inline-grid;place-items:center;padding:0;min-height:44px;width:44px;height:44px;flex:none;border-radius:50%;font-size:1.35rem;color:#ba4055;background:#f7cad33b;border-color:#d9788b70}

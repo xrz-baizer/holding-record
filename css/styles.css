@@ -329,15 +329,10 @@ html[lang=en] .field:has(input[name=hands])>label{font-size:.875rem}html[lang=en
 .operation-panel>.history-button{font-size:.9375rem;font-weight:550;min-height:2rem;padding:.3125rem .5rem}
 /* Trading actions share one column; the history entry stays last. */
 .operation-panel>.history-button{margin-top:auto;order:5}
-.lot-actions{display:flex;align-items:center;gap:.25rem;white-space:nowrap}
-.mobile-panel .lot-actions button{margin:0;flex:1;min-width:0;white-space:nowrap}
-.mobile-panel .lot-actions button[data-action=edit-lot]{color:#2867aa;background:linear-gradient(145deg,#b9d4ff28,#599af911);border-color:#ffffff90}
-[data-theme=dark] .mobile-panel .lot-actions button[data-action=edit-lot]{color:#8fb9e8;border-color:#bfd8ff30}
 @media(min-width:951px),(min-width:761px) and (pointer:fine){
  .mobile-panel table,.mobile-panel .table-footer table,.table-header-grid,
  html[lang=en] .mobile-panel table,html[lang=en] .table-header-grid{min-width:34rem}
  .table-header-grid,html[lang=en] .table-header-grid{grid-template-columns:8% 10% 10% 14% 10% 13% 17% 18%}
- .mobile-panel .lot-actions button{font-size:.75rem;padding:.125rem .25rem}
 }
 /* History uses the same transparent header and compact rows as open holdings. */
 dialog.wide:has(.history-table){width:min(58rem,calc(100vw - 2rem));max-width:58rem;height:min(34rem,calc(100dvh - 2rem));max-height:calc(100dvh - 2rem);overflow:hidden}
@@ -352,7 +347,7 @@ dialog.wide:has(.history-table){width:min(58rem,calc(100vw - 2rem));max-width:58
 .history-summary dt{font-size:.8125rem;color:var(--muted);margin-bottom:.375rem}
 .history-summary dd{margin:0;font-size:1.25rem;font-weight:700;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .history-table-wrap{overflow-x:auto;overflow-y:hidden;min-height:0;border-radius:.625rem;scrollbar-width:thin}
-.history-table{--history-columns:18% 9% 12% 14% 13% 20% 14%;display:grid;width:100%;height:100%;min-height:0;min-width:38rem;grid-template-rows:minmax(1.75rem,auto) minmax(0,1fr);border-collapse:separate;border-spacing:0}
+.history-table{--history-columns:18% 13% 11% 13% 13% 18% 14%;display:grid;width:100%;height:100%;min-height:0;min-width:38rem;grid-template-rows:minmax(1.75rem,auto) minmax(0,1fr);border-collapse:separate;border-spacing:0}
 .history-table thead{display:block;min-height:0}
 .history-table tbody{display:grid;min-height:0;grid-template-rows:repeat(6,minmax(0,1fr))}
 .history-table tr{display:grid;grid-template-columns:var(--history-columns);min-height:0}
@@ -364,6 +359,7 @@ dialog.wide:has(.history-table){width:min(58rem,calc(100vw - 2rem));max-width:58
 .history-table tbody tr:last-child td{border-bottom:0}
 .history-table tbody td:nth-child(n){height:100%;padding:.125rem .625rem;line-height:1.2;font-size:clamp(.625rem,2.6cqh,.8125rem)}
 .history-table td.history-empty{grid-column:1/-1;justify-content:center;color:var(--muted)}
+.history-table td:nth-child(2){white-space:normal;overflow-wrap:anywhere}
 .history-table .history-buy{color:#2867aa}
 .history-table .history-sell{color:var(--muted)}
 .history-table .history-undo{font-size:.75rem;font-weight:550;min-height:0;height:min(1.75rem,100%);padding:0 .625rem;color:#2867aa;background:linear-gradient(145deg,#b9d4ff28,#599af911)}
@@ -416,4 +412,100 @@ dialog.wide:has(.history-table){width:min(58rem,calc(100vw - 2rem));max-width:58
  #dialog-form:has(.history-table) .history-summary>div{min-width:0}
  #dialog-form:has(.history-table) .history-summary dt{font-size:.6875rem;margin-bottom:.125rem}
  #dialog-form:has(.history-table) .history-summary dd{font-size:1rem}
+}
+
+.field.trade-direction {
+ display:block;min-width:0;margin-inline:0;padding:0;border:0;
+}
+.trade-direction legend {
+ margin-bottom:.35rem;padding:0;color:var(--muted);font-size:.9375rem;font-weight:550;
+}
+.trade-segments {
+ position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+ padding:.25rem;border:1px solid var(--edge);border-radius:.875rem;background:var(--glass);
+}
+.lot-entry {
+ --entry-glass-fill:linear-gradient(145deg,#b9d4ff27,#599af90d);
+ --entry-glass-edge:#ffffff67;
+ --entry-glass-light:#ffffff43;
+}
+[data-theme=dark] .lot-entry {
+ --entry-glass-fill:linear-gradient(145deg,#9bbdf019,#668dc70b);
+ --entry-glass-edge:#b5d1f62e;
+ --entry-glass-light:#ffffff16;
+}
+.lot-entry :is(.trade-segments,#base-estimate,#buy-estimate) {
+ background:var(--entry-glass-fill);border-color:var(--entry-glass-edge);
+ box-shadow:inset 0 1px 0 var(--entry-glass-light);
+}
+.trade-segments::before {
+ content:"";position:absolute;inset-block:.25rem;left:.25rem;width:calc(50% - .25rem);
+ border:1px solid var(--edge);border-radius:.625rem;background:linear-gradient(145deg,#b9d4ff9c,#599af933);
+ box-shadow:inset 0 1px 0 #ffffff80;pointer-events:none;
+}
+.trade-segments:has(#trade-side-sell:checked)::before {transform:translateX(100%)}
+[data-theme=dark] .trade-segments::before {
+ background:linear-gradient(145deg,#5897f85c,#569cfa26);box-shadow:inset 0 1px 0 #ffffff29;
+}
+.trade-segments input[type=radio] {
+ position:absolute;width:1px;height:1px;min-height:0;margin:0;padding:0;border:0;clip-path:inset(50%);
+}
+.trade-segments label {
+ position:relative;display:grid;place-items:center;min-height:44px;padding:.25rem .35rem;
+ border-radius:.625rem;text-align:center;line-height:1.2;color:var(--muted);cursor:pointer;
+}
+.trade-segments input:checked + label {color:var(--blue);font-weight:750}
+.trade-segments #trade-side-sell:checked + label {color:var(--red)}
+.trade-segments input:focus-visible + label {outline:2px solid var(--blue);outline-offset:-2px}
+@media (prefers-reduced-motion:no-preference) {
+ .trade-segments::before {transition:transform .18s ease-out}
+}
+.row-actions button:is([data-action=cover-reverse],[data-action=cover-all]){color:var(--green)}
+[data-theme=dark] .row-actions button:is([data-action=cover-reverse],[data-action=cover-all]){color:var(--green)!important}
+.trade-panel {
+ min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);
+ overflow:hidden;margin:.125rem .375rem .375rem;padding:.1rem var(--lot-bar-inset) var(--lot-bar-inset);
+ border:1px solid var(--edge);border-radius:.625rem;
+}
+.trade-panel-head {min-width:0;overflow:hidden}
+.trade-panel-scroll {position:relative;min-width:0;min-height:0;overflow:auto}
+.lot-table-accessible-head {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.trade-table {
+ width:100%;min-width:36rem;table-layout:fixed;border-collapse:separate;border-spacing:0;
+}
+.trade-table :is(th,td):nth-child(n) {
+ width:auto;height:auto;padding:.3rem .3rem;border:0;text-align:center;
+ font-size:.8125rem;line-height:1.25;font-variant-numeric:tabular-nums;
+}
+.trade-table th:nth-child(n) {color:inherit;font-weight:750}
+.trade-table td {border-bottom:1px solid var(--line)}
+.trade-table :is(.numeric-line,.pnl-line,.value-line) {
+ display:inline-block;font-size:calc(.8125rem * var(--pnl-scale,1));line-height:1.25;
+}
+.trade-table td.purchase-date {font-size:.75rem;white-space:normal;overflow-wrap:anywhere}
+.trade-table .trade-summary td {white-space:normal}
+.trade-table .row-actions button {max-width:100%;min-height:1.5rem;padding:.15rem .3rem;font-size:.75rem;white-space:normal}
+.trade-table :is([data-action=settle],[data-action=sell-all]) {color:var(--red)}
+[data-theme=dark] .trade-table :is([data-action=settle],[data-action=sell-all]) {color:var(--red)!important}
+/* Shared inset bands for phone and desktop tables. */
+:is(.phone-lots,.trade-panel) {
+ --lot-bar-inset:.35rem;
+ --lot-bar-fill:#d7e6fa7a;
+ --lot-bar-edge:#ffffff90;
+}
+[data-theme=dark] :is(.phone-lots,.trade-panel) {
+ --lot-bar-fill:#86b5fc26;
+ --lot-bar-edge:#bfd8ff24;
+}
+:is(.phone-lots,.trade-table) :is(thead th,.trade-summary td) {
+ border-block:.2rem solid transparent;background-color:var(--lot-bar-fill);background-clip:padding-box;
+ box-shadow:inset 0 1px var(--lot-bar-edge),inset 0 -1px var(--lot-bar-edge);
+ font-weight:750;
+}
+:is(.phone-lots,.trade-table) :is(thead th,.trade-summary td):first-child {
+ border-start-start-radius:.75rem;border-end-start-radius:.75rem;
+ background-color:var(--frozen-backing,var(--lot-bar-fill));
+}
+:is(.phone-lots,.trade-table) :is(thead th,.trade-summary td):last-child {
+ border-start-end-radius:.75rem;border-end-end-radius:.75rem;
 }
